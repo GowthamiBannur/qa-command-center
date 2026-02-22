@@ -13,158 +13,118 @@ try:
 except Exception:
     st.error("API Key missing! Add GROQ_API_KEY to your Streamlit Secrets.")
 
-# 3. Persistent Storage Logic (Saves to a local file)
+# 3. Persistent Storage (JSON File)
 DB_FILE = "qa_database.json"
 
 def load_data():
     if os.path.exists(DB_FILE):
-        with open(DB_FILE, "r") as f:
-            return json.load(f)
+        try:
+            with open(DB_FILE, "r") as f:
+                return json.load(f)
+        except: return {}
     return {}
 
 def save_data(data):
-    # Convert DataFrames to dict for JSON storage
-    serializable_data = {}
+    serializable = {}
     for p_id, p_val in data.items():
-        serializable_data[p_id] = {
-            "requirement": p_val["requirement"],
-            "strategy": p_val["strategy"],
-            "tracker_dict": p_val["tracker_df"].to_dict('records')
+        serializable[p_id] = {
+            "requirement": p_val.get("requirement", ""),
+            "strategy": p_val.get("strategy", ""),
+            "tracker_dict": p_val["tracker_df"].to_dict('records') if isinstance(p_val.get("tracker_df"), pd.DataFrame) else []
         }
     with open(DB_FILE, "w") as f:
-        json.dump(serializable_data, f)
+        json.dump(serializable, f)
 
-# Initialize Session State from Storage
+# Initialize Session State
 if 'project_db' not in st.session_state:
     loaded = load_data()
     st.session_state.project_db = {}
-    for p_id, p_val in loaded.items():
-        st.session_state.project_db[p_id] = {
-            "requirement": p_val["requirement"],
-            "strategy": p_val["strategy"],
-            "tracker_df": pd.DataFrame(p_val["tracker_dict"])
-        }
+    if not loaded: # Default starting project
+        st.session_state.project_db["Project_ABC"] = {"requirement": "", "strategy": "", "tracker_df": pd.DataFrame()}
+    else:
+        for p_id, p_val in loaded.items():
+            st.session_state.project_db[p_id] = {
+                "requirement": p_val.get("requirement", ""),
+                "strategy": p_val.get("strategy", ""),
+                "tracker_df": pd.DataFrame(p_val.get("tracker_dict", []))
+            }
 
 # 4. Sidebar: Project Management
 with st.sidebar:
     st.title("🛡️ QA Hub Manager")
     
-    # Switch between projects
-    existing_projects = list(st.session_state.project_db.keys())
-    selected_project = st.selectbox("Switch Project:", options=existing_projects + ["+ Create New Project"])
+    # Switcher
+    existing_list = list(st.session_state.project_db.keys())
+    selected_project = st.selectbox("Switch/Create Project:", options=existing_list + ["+ New Project"])
     
-    if selected_project == "+ Create New Project":
-        new_name = st.text_input("New Project Name:")
-        if st.button("Initialize Project"):
+    active_id = selected_project
+    if selected_project == "+ New Project":
+        new_name = st.text_input("Project Name:")
+        if st.button("Create"):
             st.session_state.project_db[new_name] = {
                 "requirement": "", "strategy": "",
                 "tracker_df": pd.DataFrame(columns=["ID", "Scenario", "Status", "Severity", "Priority", "Evidence_Link"])
             }
             st.rerun()
-    else:
-        project_id = selected_project
-
+    
     st.markdown("---")
-    if st.button("💾 Save All Changes (Persistent)"):
+    if st.button("💾 Save All Changes"):
         save_data(st.session_state.project_db)
-        st.success("All projects saved for tomorrow!")
+        st.success("Saved to database!")
 
-current_data = st.session_state.project_db[project_id]
+# Safely get current data
+current_data = st.session_state.project_db.get(active_id, st.session_state.project_db[existing_list[0]])
 
 # 5. UI Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ Strategy & Planning", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: STRATEGY & PLANNING ---
+# --- TAB 1: STRATEGY ---
 with tab1:
     col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Business Requirements")
-        user_req = st.text_area("Requirement Description:", value=current_data["requirement"], height=200)
+        st.subheader("Requirements")
+        user_req = st.text_area("Description:", value=current_data.get("requirement", ""), height=200)
         current_data["requirement"] = user_req
         platform = st.selectbox("Platform", ["Web", "Android", "iOS", "Backend"])
 
-        if st.button("🚀 Generate Deep-Dive Suite"):
-            with st.spinner("Analyzing for Edge Cases & Revenue Impact..."):
-                prompt = f"""
-                Act as a Principal QA. For the requirement: {user_req}
-                Generate 15+ test cases covering: 
-                1. Happy Path 2. Extreme Edge Cases 3. Negative Scenarios 4. UI/UX 5. Performance.
-                
-                For each case, determine Severity (Blocker/Critical/Major/Minor) and Priority (P0/P1/P2/P3) 
-                based on user impact and revenue risk.
-                
-                FORMAT: Provide a clean list. Each line must be:
-                'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'
-                """
+        if st.button("🚀 Generate Deep-Dive Plan"):
+            with st.spinner("Analyzing for Edge Cases..."):
+                prompt = f"Principal QA: Generate 15+ complex test cases for {platform}: {user_req}. Format: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"
                 response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
-                raw_out = response.choices[0].message.content
+                raw_out = response.choices[0].message.content.replace("**", "") # Clean UI
                 current_data["strategy"] = raw_out
                 
-                # Auto-parse into Execution Log
+                # Auto-parse to Log
                 lines = [l.replace("CASE:", "").strip() for l in raw_out.split("\n") if "CASE:" in l]
                 rows = []
                 for i, l in enumerate(lines):
                     p = l.split("|")
                     rows.append({
-                        "ID": f"TC-{i+1}", 
-                        "Scenario": p[0] if len(p)>0 else "N/A",
-                        "Status": "Pending",
-                        "Severity": p[2] if len(p)>2 else "Major",
-                        "Priority": p[3] if len(p)>3 else "P1",
-                        "Evidence_Link": "None"
+                        "ID": f"TC-{i+1}", "Scenario": p[0] if len(p)>0 else "N/A",
+                        "Status": "Pending", "Severity": p[2].strip() if len(p)>2 else "Major",
+                        "Priority": p[3].strip() if len(p)>3 else "P1", "Evidence_Link": "None"
                     })
                 current_data["tracker_df"] = pd.DataFrame(rows)
                 st.rerun()
 
     with col2:
-        st.subheader("Refined Test Strategy")
-        # Display without ** markers, using clean UI components
-        if current_data["strategy"]:
-            clean_strategy = current_data["strategy"].replace("**", "")
-            st.markdown(clean_strategy)
+        st.subheader("Professional Strategy View")
+        if current_data.get("strategy"):
+            # Display clean strategy
+            st.info("💡 High-impact scenarios identified for this requirement.")
+            st.markdown(current_data["strategy"])
         else:
-            st.info("No strategy generated yet.")
+            st.write("No strategy logged for this project.")
 
-# --- TAB 2: EXECUTION LOG ---
+# --- TAB 2: EXECUTION ---
 with tab2:
-    st.subheader(f"Execution Tracker: {project_id}")
-    if not current_data["tracker_df"].empty:
-        # User can edit Severity and Priority manually if AI's choice is wrong
-        edited_df = st.data_editor(
-            current_data["tracker_df"],
-            column_config={
+    st.subheader(f"Execution Log: {active_id}")
+    df = current_data.get("tracker_df", pd.DataFrame())
+    if not df.empty:
+        # Status, Severity, Priority are all editable
+        edited_df = st.data_editor(df, column_config={
                 "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
                 "Severity": st.column_config.SelectboxColumn("Severity", options=["Blocker", "Critical", "Major", "Minor"]),
-                "Priority": st.column_config.SelectboxColumn("Priority", options=["P0", "P1", "P2", "P3"]),
-            },
-            use_container_width=True
-        )
-        current_data["tracker_df"] = edited_df
-
-        # Handle Screenshot/Link Attachment
-        st.markdown("### 📎 Evidence Attachment")
-        tc_to_attach = st.selectbox("Select Test Case for Evidence:", options=edited_df["ID"])
-        evidence_url = st.text_input("Paste Screenshot/Recording Link (e.g., Drive/Cloudinary):")
-        if st.button("Attach Link to Scenario"):
-            idx = current_data["tracker_df"].index[current_data["tracker_df"]["ID"] == tc_to_attach][0]
-            current_data["tracker_df"].at[idx, "Evidence_Link"] = evidence_url
-            st.success(f"Linked evidence to {tc_to_attach}")
-    else:
-        st.warning("Generate scenarios in the Planner tab.")
-
-# --- TAB 3: BUG CENTER ---
-with tab3:
-    st.subheader("Automated Bug Tracker")
-    fails = current_data["tracker_df"][current_data["tracker_df"]["Status"] == "Fail"]
-    if fails.empty:
-        st.info("Zero failures logged. Great job!")
-    else:
-        for _, bug in fails.iterrows():
-            with st.expander(f"🐞 BUG: {bug['ID']} - {bug['Scenario']}"):
-                st.error(f"Severity: {bug['Severity']} | Priority: {bug['Priority']}")
-                st.markdown(f"**Evidence:** {bug['Evidence_Link']}")
-                st.write("---")
-                if st.button(f"Draft Jira Report for {bug['ID']}"):
-                    bug_prompt = f"Write a Jira bug report for {bug['Scenario']}. Severity: {bug['Severity']}. Evidence Link: {bug['Evidence_Link']}"
-                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": bug_prompt}])
-                    st.code(res.choices[0].message.content)
+                "Priority": st.column_config.SelectboxColumn("Priority", options=["P0", "P1", "P2", "P3"])
+            }, use_container_width=True)
+        current_data["tracker_df"] =
