@@ -102,3 +102,30 @@ with tab1:
 with tab2:
     st.subheader("Manual Execution Tracker")
     if not current_data["tracker_df"].empty:
+        # Interactive Editor
+        updated_tracker = st.data_editor(
+            current_data["tracker_df"], 
+            num_rows="dynamic", 
+            use_container_width=True,
+            key=f"editor_{project_id}"
+        )
+        current_data["tracker_df"] = updated_tracker
+        
+        # Download Button
+        csv = updated_tracker.to_csv(index=False).encode('utf-8')
+        st.download_button("📥 Export Project Results (CSV)", csv, f"{project_id}_report.csv", "text/csv")
+    else:
+        st.warning("No test cases found. Generate them in the Planner tab first.")
+
+# --- TAB 3: BUG REPORTER (The Secretary) ---
+with tab3:
+    st.subheader("AI Bug Formatter")
+    raw_bug = st.text_area("Quickly describe the failure:", placeholder="Login fails on Android when no internet...")
+    if st.button("🛠️ Format for Developers"):
+        with st.spinner("Formatting..."):
+            bug_prompt = f"Format this into a professional bug report for {platform}: {raw_bug}"
+            res = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": bug_prompt}]
+            )
+            st.code(res.choices[0].message.content, language="markdown")
