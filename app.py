@@ -1,112 +1,81 @@
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
-from io import BytesIO
+import json
 
-# 1. Page Config
-st.set_page_config(page_title="QA Command Center Pro", layout="wide", page_icon="🛡️")
+# 1. Setup
+st.set_page_config(page_title="QA Command Center Pro", layout="wide")
+client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
 
-# 2. Setup Client
-try:
-    client = OpenAI(
-        base_url="https://api.groq.com/openai/v1", 
-        api_key=st.secrets["GROQ_API_KEY"]
-    )
-except Exception:
-    st.error("API Key missing! Add GROQ_API_KEY to your Streamlit Secrets.")
+# Initialize Database in Session State
+if 'project_db' not in st.session_state:
+    st.session_state.project_db = {}
 
-# 3. Sidebar with Advanced Tools
-with st.sidebar:
-    st.title("🛡️ QA Toolbox")
-    st.markdown("---")
-    test_mode = st.select_slider("Test Rigor:", options=["Standard", "Regression", "Paranoid"])
-    st.info(f"Current Mode: **{test_mode}**")
-    
-    st.markdown("### 📖 Quick Help")
-    st.caption("1. Paste requirements in 'Planner'.")
-    st.caption("2. Track progress in 'Execution'.")
-    st.caption("3. Export results when finished.")
+st.title("🛡️ Project-Based QA Dashboard")
 
-# 4. Main UI Logic
-st.title("🚀 Shared QA Command Center")
+# 2. Project Selection
+project_name = st.sidebar.text_input("Current Project Name:", value="Project_ABC")
+if project_name not in st.session_state.project_db:
+    st.session_state.project_db[project_name] = {
+        "requirement": "",
+        "test_plan": "",
+        "tracker": pd.DataFrame(columns=["ID", "Scenario", "Status", "Bug_Logged"])
+    }
 
-tab1, tab2, tab3 = st.tabs(["📋 Test Planner", "✅ Execution Tracker", "🐞 Bug Reporter"])
+current_project = st.session_state.project_db[project_name]
 
-# --- TAB 1: PLANNER ---
+# 3. Main Interface
+tab1, tab2 = st.tabs(["🏗️ Planner & Auto-Log", "📊 Execution & Stats"])
+
 with tab1:
-    col1, col2 = st.columns([1, 1])
+    col1, col2 = st.columns(2)
     with col1:
-        st.subheader("Input Requirements")
-        req_input = st.text_area("User Story / Jira Description:", height=250, placeholder="Paste here...")
-        platform = st.selectbox("Target Platform", ["Web Browser", "Android App", "iOS App", "API/Backend"])
+        st.subheader(f"Requirements for {project_name}")
+        req = st.text_area("Enter Requirement:", value=current_project["requirement"], height=200)
+        current_project["requirement"] = req
         
-        if st.button("✨ Generate Comprehensive Plan"):
-            if not req_input:
-                st.warning("Please paste a requirement first!")
-            else:
-                with st.spinner(f"AI is thinking in {test_mode} mode..."):
-                    # Enhanced Prompt
-                    prompt = f"""
-                    Act as a Senior QA Lead. Generate a test plan for: {platform}.
-                    Rigor Level: {test_mode}.
-                    Requirement: {req_input}
-                    
-                    Format with:
-                    - **Happy Path** (Standard flow)
-                    - **Negative Testing** (Error states)
-                    - **{platform} Specific Edge Cases** (Device/Browser quirks)
-                    - **UI/UX Consistency**
-                    """
-                    
-                    response = client.chat.completions.create(
-                        model="llama-3.3-70b-versatile",
-                        messages=[{"role": "user", "content": prompt}]
-                    )
-                    st.session_state['plan'] = response.choices[0].message.content
+        if st.button("🚀 Generate & Auto-Sync to Tracker"):
+            with st.spinner("Writing test cases and syncing..."):
+                # System prompt to force AI to return a specific format
+                prompt = f"Act as a QA. For this req: {req}, provide a list of 5 key test scenarios. Format EACH one exactly like this: 'SCENARIO: [description]'"
+                
+                response = client.chat.completions.create(
+                    model="llama-3.3-70b-versatile",
+                    messages=[{"role": "user", "content": prompt}]
+                )
+                
+                raw_plan = response.choices[0].message.content
+                current_project["test_plan"] = raw_plan
+                
+                # AUTO-LOGGING LOGIC: Extract lines starting with SCENARIO
+                new_scenarios = [line.replace("SCENARIO: ", "") for line in raw_plan.split("\n") if "SCENARIO: " in line]
+                
+                new_rows = pd.DataFrame([
+                    {"ID": f"TC-{i+1}", "Scenario": s, "Status": "Pending", "Bug_Logged": "No"} 
+                    for i, s in enumerate(new_scenarios)
+                ])
+                current_project["tracker"] = new_rows
+                st.success("Successfully generated and synced to Execution Tracker!")
 
     with col2:
-        st.subheader("Generated Strategy")
-        if 'plan' in st.session_state:
-            st.markdown(st.session_state['plan'])
-        else:
-            st.info("Your test strategy will appear here.")
+        st.subheader("Generated Plan")
+        st.markdown(current_project["test_plan"])
 
-# --- TAB 2: EXECUTION ---
 with tab2:
-    st.subheader("Manual Test Execution Log")
+    st.subheader(f"Execution Tracker: {project_name}")
     
-    # Initialize tracker data
-    if 'tracker_data' not in st.session_state:
-        st.session_state.tracker_data = pd.DataFrame([
-            {"ID": "TC1", "Scenario": "Verify Login", "Status": "Pending", "Notes": ""}
-        ])
+    # Calculate Stats
+    df = current_project["tracker"]
+    if not df.empty:
+        total = len(df)
+        passed = len(df[df["Status"] == "Pass"])
+        failed = len(df[df["Status"] == "Fail"])
+        st.write(f"**Stats:** Total: {total} | ✅ Passed: {passed} | ❌ Failed: {failed}")
 
-    # Dynamic Editor
-    edited_df = st.data_editor(st.session_state.tracker_data, num_rows="dynamic", use_container_width=True)
-    st.session_state.tracker_data = edited_df
+    # Interactive Tracker
+    updated_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
+    current_project["tracker"] = updated_df
 
-    # Export to CSV
-    csv = edited_df.to_csv(index=False).encode('utf-8')
-    st.download_button(
-        label="📥 Download Test Results (CSV)",
-        data=csv,
-        file_name='test_execution_report.csv',
-        mime='text/csv',
-    )
-
-# --- TAB 3: BUG REPORTER ---
-with tab3:
-    st.subheader("Quick Bug Report Generator")
-    st.write("Found a bug? Describe it simply, and let AI format it for Jira/GitHub.")
-    
-    bug_desc = st.text_area("Describe the bug (Steps/Observed/Expected):", height=150)
-    
-    if st.button("🛠️ Format Bug Report"):
-        with st.spinner("Formatting..."):
-            bug_prompt = f"Turn this messy bug description into a professional QA bug report with Title, Steps to Reproduce, Expected vs Observed Result: {bug_desc}"
-            bug_res = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": bug_prompt}]
-            )
-            st.code(bug_res.choices[0].message.content, language="markdown")
-            st.success("Copy the code above into your Bug Tracker!")
+    # Auto-Bug Logic Hint
+    if not updated_df[updated_df["Status"] == "Fail"].empty:
+        st.warning("⚠️ Failures detected! Head to the Bug Reporter to finalize logs.")
