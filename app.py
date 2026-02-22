@@ -1,81 +1,104 @@
 import streamlit as st
 import pandas as pd
 from openai import OpenAI
-import json
 
-# 1. Setup
-st.set_page_config(page_title="QA Command Center Pro", layout="wide")
-client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
+# 1. Page Config
+st.set_page_config(page_title="QA Command Center Pro", layout="wide", page_icon="🛡️")
 
-# Initialize Database in Session State
+# 2. Setup AI Client
+try:
+    client = OpenAI(
+        base_url="https://api.groq.com/openai/v1", 
+        api_key=st.secrets["GROQ_API_KEY"]
+    )
+except Exception:
+    st.error("API Key missing! Please add GROQ_API_KEY to your Streamlit Secrets.")
+
+# 3. Project Database (Persistence in Session State)
 if 'project_db' not in st.session_state:
     st.session_state.project_db = {}
 
-st.title("🛡️ Project-Based QA Dashboard")
+# 4. Sidebar: Project Management
+with st.sidebar:
+    st.title("🛡️ Project Manager")
+    project_id = st.text_input("Enter Project ID/Name:", value="Project_ABC")
+    
+    # Initialize project if new
+    if project_id not in st.session_state.project_db:
+        st.session_state.project_db[project_id] = {
+            "requirement": "",
+            "plan_text": "",
+            "tracker_df": pd.DataFrame(columns=["ID", "Scenario", "Status", "Notes"])
+        }
+    
+    current_data = st.session_state.project_db[project_id]
+    st.success(f"Active: {project_id}")
+    st.markdown("---")
+    st.info("💡 Generate a plan in Tab 1, and it will auto-populate the log in Tab 2.")
 
-# 2. Project Selection
-project_name = st.sidebar.text_input("Current Project Name:", value="Project_ABC")
-if project_name not in st.session_state.project_db:
-    st.session_state.project_db[project_name] = {
-        "requirement": "",
-        "test_plan": "",
-        "tracker": pd.DataFrame(columns=["ID", "Scenario", "Status", "Bug_Logged"])
-    }
+# 5. Main UI Header
+st.title(f"🚀 QA Dashboard: {project_id}")
 
-current_project = st.session_state.project_db[project_name]
+tab1, tab2, tab3 = st.tabs(["🏗️ Test Planner", "✅ Execution Tracker", "🐞 Bug Reporter"])
 
-# 3. Main Interface
-tab1, tab2 = st.tabs(["🏗️ Planner & Auto-Log", "📊 Execution & Stats"])
-
+# --- TAB 1: PLANNER (The Brain) ---
 with tab1:
-    col1, col2 = st.columns(2)
+    col1, col2 = st.columns([1, 1])
+    
     with col1:
-        st.subheader(f"Requirements for {project_name}")
-        req = st.text_area("Enter Requirement:", value=current_project["requirement"], height=200)
-        current_project["requirement"] = req
+        st.subheader("Requirements")
+        user_req = st.text_area("Paste User Story / Requirement:", 
+                               value=current_data["requirement"], 
+                               height=250, 
+                               placeholder="e.g., Login with OTP and Google Auth...")
+        current_data["requirement"] = user_req
         
-        if st.button("🚀 Generate & Auto-Sync to Tracker"):
-            with st.spinner("Writing test cases and syncing..."):
-                # System prompt to force AI to return a specific format
-                prompt = f"Act as a QA. For this req: {req}, provide a list of 5 key test scenarios. Format EACH one exactly like this: 'SCENARIO: [description]'"
-                
-                response = client.chat.completions.create(
-                    model="llama-3.3-70b-versatile",
-                    messages=[{"role": "user", "content": prompt}]
-                )
-                
-                raw_plan = response.choices[0].message.content
-                current_project["test_plan"] = raw_plan
-                
-                # AUTO-LOGGING LOGIC: Extract lines starting with SCENARIO
-                new_scenarios = [line.replace("SCENARIO: ", "") for line in raw_plan.split("\n") if "SCENARIO: " in line]
-                
-                new_rows = pd.DataFrame([
-                    {"ID": f"TC-{i+1}", "Scenario": s, "Status": "Pending", "Bug_Logged": "No"} 
-                    for i, s in enumerate(new_scenarios)
-                ])
-                current_project["tracker"] = new_rows
-                st.success("Successfully generated and synced to Execution Tracker!")
+        platform = st.selectbox("Platform", ["Web", "Android", "iOS", "API"])
+
+        if st.button("✨ Generate & Auto-Log Test Cases"):
+            if not user_req:
+                st.warning("Please enter a requirement first.")
+            else:
+                with st.spinner("Analyzing for edge cases and deep-dive scenarios..."):
+                    # Paranoid Senior QA Prompt for better quality
+                    prompt = f"""
+                    Act as a Senior Lead QA. Create a detailed test plan for: {platform}.
+                    Requirement: {user_req}
+                    
+                    Include: Happy Path, Negative cases, Security, and {platform} edge cases.
+                    
+                    FORMAT: Return ONLY a list of test cases starting with 'CASE: [Title] | [Expected Result]'
+                    """
+                    
+                    response = client.chat.completions.create(
+                        model="llama-3.3-70b-versatile",
+                        messages=[{"role": "system", "content": "You are a meticulous QA Engineer."},
+                                  {"role": "user", "content": prompt}]
+                    )
+                    
+                    plan_result = response.choices[0].message.content
+                    current_data["plan_text"] = plan_result
+                    
+                    # AUTO-LOGGING LOGIC: Extract and move to Tracker
+                    lines = [line.replace("CASE:", "").strip() for line in plan_result.split("\n") if "CASE:" in line]
+                    new_rows = []
+                    for i, line in enumerate(lines):
+                        parts = line.split("|")
+                        scenario = parts[0].strip() if len(parts) > 0 else line
+                        expected = parts[1].strip() if len(parts) > 1 else "Works as expected"
+                        new_rows.append({"ID": f"TC-{i+1}", "Scenario": scenario, "Status": "Pending", "Notes": expected})
+                    
+                    current_data["tracker_df"] = pd.DataFrame(new_rows)
+                    st.rerun()
 
     with col2:
-        st.subheader("Generated Plan")
-        st.markdown(current_project["test_plan"])
+        st.subheader("Detailed Test Strategy")
+        if current_data["plan_text"]:
+            st.markdown(current_data["plan_text"])
+        else:
+            st.info("AI-generated plan will appear here.")
 
+# --- TAB 2: EXECUTION (The Log) ---
 with tab2:
-    st.subheader(f"Execution Tracker: {project_name}")
-    
-    # Calculate Stats
-    df = current_project["tracker"]
-    if not df.empty:
-        total = len(df)
-        passed = len(df[df["Status"] == "Pass"])
-        failed = len(df[df["Status"] == "Fail"])
-        st.write(f"**Stats:** Total: {total} | ✅ Passed: {passed} | ❌ Failed: {failed}")
-
-    # Interactive Tracker
-    updated_df = st.data_editor(df, num_rows="dynamic", use_container_width=True)
-    current_project["tracker"] = updated_df
-
-    # Auto-Bug Logic Hint
-    if not updated_df[updated_df["Status"] == "Fail"].empty:
-        st.warning("⚠️ Failures detected! Head to the Bug Reporter to finalize logs.")
+    st.subheader("Manual Execution Tracker")
+    if not current_data["tracker_df"].empty:
