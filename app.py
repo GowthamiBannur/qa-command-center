@@ -76,26 +76,31 @@ with st.sidebar:
     current_df = st.session_state.project_db[active_id]["tracker_df"]
     if not current_df.empty and "Fail" in current_df["Status"].values:
         fail_data = current_df[current_df["Status"] == "Fail"]
-        if "Module" in fail_data.columns and not fail_data["Module"].replace("", pd.NA).dropna().empty:
-            chart_data = fail_data["Module"].value_counts()
+        # Filter out empty module strings for the chart
+        clean_fail_data = fail_data[fail_data["Module"].str.strip() != ""]
+        if not clean_fail_data.empty:
+            chart_data = clean_fail_data["Module"].value_counts()
             st.bar_chart(chart_data)
         else:
-            st.info("Assign modules in Bug Center to see stats.")
+            st.info("Assign modules in Bug Center to see health metrics.")
     else:
         st.success("Clean Build: No Bugs!")
 
-    # EXCEL EXPORT
+    # SAFE EXCEL EXPORT
     st.markdown("---")
     if not current_df.empty:
-        output = io.BytesIO()
-        with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-            current_df.to_excel(writer, index=False, sheet_name='Execution_Log')
-        st.download_button(
-            label="📥 Export Log to Excel",
-            data=output.getvalue(),
-            file_name=f"{active_id}_QA_Report.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-        )
+        try:
+            output = io.BytesIO()
+            with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+                current_df.to_excel(writer, index=False, sheet_name='Execution_Log')
+            st.download_button(
+                label="📥 Export Log to Excel",
+                data=output.getvalue(),
+                file_name=f"{active_id}_QA_Report.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+        except ModuleNotFoundError:
+            st.warning("Excel library 'xlsxwriter' is installing. Please refresh in a moment.")
 
     if st.button("💾 Save All Changes"):
         save_data(st.session_state.project_db)
@@ -118,8 +123,8 @@ with tab1:
         if st.button("🚀 Audit PRD & Map Risk"):
             with st.spinner("Analyzing business impact..."):
                 prompt = f"""
-                Act as a Principal QA. Analyze this PRD: {user_req}
-                1. Identify 15+ test cases. 
+                Act as a Principal QA Lead. Analyze this PRD: {user_req}
+                1. Identify 15+ complex test cases. 
                    Format: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'
                 2. Provide a 'RISK_REPORT' using clear Markdown headers and bullet points.
                 """
@@ -195,7 +200,7 @@ with tab3:
             with st.expander(f"Report: {bug['ID']} - {bug['Scenario']}"):
                 b_col1, b_col2 = st.columns(2)
                 with b_col1:
-                    final_mod = st.text_input("Module:", value=found_mod if found_mod else bug.get("Module", ""), key=f"mod_{bug['ID']}", placeholder="e.g. Checkout")
+                    final_mod = st.text_input("Module Name:", value=found_mod if found_mod else bug.get("Module", ""), key=f"mod_{bug['ID']}", placeholder="e.g. Checkout")
                     current_data["tracker_df"].at[index, "Module"] = final_mod
                     
                     final_sev = st.selectbox("Severity:", options=["Blocker", "Critical", "Major", "Minor"], 
@@ -207,8 +212,8 @@ with tab3:
                                              key=f"pri_{bug['ID']}")
                     final_ass = st.text_input("Assigned To:", value=bug['Assigned_To'], key=f"ass_{bug['ID']}")
                 
-                final_exp = st.text_input("Expected:", value=bug['Expected'], key=f"exp_{bug['ID']}")
-                final_act = st.text_input("Actual:", value="Does not meet criteria.", key=f"act_{bug['ID']}")
+                final_exp = st.text_input("Expected Result:", value=bug['Expected'], key=f"exp_{bug['ID']}")
+                final_act = st.text_input("Actual Result:", value="Does not meet criteria.", key=f"act_{bug['ID']}")
 
                 if st.button(f"Generate Jira Draft for {bug['ID']}", key=f"btn_{bug['ID']}"):
                     report_prompt = f"Professional Jira bug report for {bug['Scenario']}. Module: {final_mod}. Severity: {final_sev}. Link: {bug['Evidence_Link']}"
