@@ -4,6 +4,7 @@ from openai import OpenAI
 import json
 import os
 import io
+import re
 
 # 1. Page Config
 st.set_page_config(page_title="Principal AI QA Hub", layout="wide", page_icon="🛡️")
@@ -29,10 +30,14 @@ def save_data(data):
     for p_id, p_val in data.items():
         serializable[p_id] = {
             "requirement": p_val.get("requirement", ""),
-            "risk_summary": p_val.get("risk_summary", ""), # Restored persistence
+            "risk_summary": p_val.get("risk_summary", ""),
             "tracker_dict": p_val["tracker_df"].to_dict('records') if isinstance(p_val.get("tracker_df"), pd.DataFrame) else []
         }
     with open(DB_FILE, "w") as f: json.dump(serializable, f)
+
+# Helper to remove AI markdown artifacts like **
+def clean_text(text):
+    return re.sub(r'\*\*|__', '', text).strip()
 
 # Initialize Session State
 DEFAULT_COLS = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module"]
@@ -78,7 +83,7 @@ current_data = st.session_state.project_db[active_id]
 # 5. UI Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ PRD & Risk Analysis", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: PRD ANALYSIS (Restored Risk & Mitigation) ---
+# --- TAB 1: PRD ANALYSIS (Cleaning Fix Applied) ---
 with tab1:
     col1, col2 = st.columns([1, 1.2])
     with col1:
@@ -90,12 +95,11 @@ with tab1:
             with st.spinner("Analyzing Risks & Mitigation..."):
                 prompt = f"""Analyze PRD: {user_req}. 
                 1. Generate 15+ test cases in format: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'.
-                2. Provide a 'RISK_REPORT' section identifying high-risk areas and mitigation strategies using Markdown bullets."""
+                2. Provide a 'RISK_REPORT' section with Mitigation strategies."""
                 
                 response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
                 full_res = response.choices[0].message.content
                 
-                # Split Logic to capture Risk Report
                 if "RISK_REPORT" in full_res:
                     parts = full_res.split("RISK_REPORT")
                     current_data["risk_summary"] = parts[1]
@@ -105,10 +109,12 @@ with tab1:
                 for i, l in enumerate(lines):
                     p = l.split("|")
                     rows.append({
-                        "ID": f"TC-{i+1}", "Scenario": p[0].strip() if len(p)>0 else "N/A",
-                        "Expected": p[1].strip() if len(p)>1 else "Pass",
-                        "Status": "Pending", "Severity": p[2].strip() if len(p)>2 else "Major",
-                        "Priority": p[3].strip() if len(p)>3 else "P1", 
+                        "ID": f"TC-{i+1}", 
+                        "Scenario": clean_text(p[0]) if len(p)>0 else "N/A", # Asterisk Cleaning
+                        "Expected": clean_text(p[1]) if len(p)>1 else "Pass", # Asterisk Cleaning
+                        "Status": "Pending", 
+                        "Severity": clean_text(p[2]) if len(p)>2 else "Major",
+                        "Priority": clean_text(p[3]) if len(p)>3 else "P1", 
                         "Evidence_Link": "", "Assigned_To": "Developer", "Module": ""
                     })
                 current_data["tracker_df"] = pd.DataFrame(rows)
@@ -117,7 +123,7 @@ with tab1:
     with col2:
         if current_data.get("risk_summary"):
             st.subheader("🔥 Risk & Mitigation Strategy")
-            st.info(current_data["risk_summary"]) # Restored visual section
+            st.info(current_data["risk_summary"]) # Restored
             st.divider()
             
         st.subheader("🔍 Structured Test Suite")
@@ -145,10 +151,8 @@ with tab2:
             idx = current_data["tracker_df"].index[current_data["tracker_df"]["ID"] == target_tc][0]
             current_data["tracker_df"].at[idx, "Evidence_Link"] = link_val
             st.success("Link Saved!")
-    else:
-        st.warning("Audit PRD in Tab 1 to see the log.")
 
-# --- TAB 3: BUG CENTER ---
+# --- TAB 3: BUG CENTER (Fields Restored + Evidence Below Description) ---
 with tab3:
     st.subheader("🐞 Bug Center")
     df_check = current_data.get("tracker_df", pd.DataFrame())
@@ -160,33 +164,30 @@ with tab3:
             st.info("No failures logged.")
         else:
             for index, bug in fails.iterrows():
-                # Module Logic
-                prd_text = current_data.get("requirement", "").upper()
-                found_mod = ""
-                for m in ["PDP", "PLP", "CHECKOUT", "HOME", "CART"]:
-                    if m in prd_text and m in bug['Scenario'].upper():
-                        found_mod = m.title()
-                        break
-
                 with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
+                    # Row 1: Module & Priority
                     b1, b2 = st.columns(2)
-                    with b1:
-                        mod_val = st.text_input("Module:", value=found_mod if found_mod else bug.get("Module", ""), key=f"mod_{bug['ID']}")
-                        current_data["tracker_df"].at[index, "Module"] = mod_val
-                        final_sev = st.selectbox("Severity:", options=["Blocker", "Critical", "Major", "Minor"], index=["Blocker", "Critical", "Major", "Minor"].index(bug['Severity']) if bug['Severity'] in ["Blocker", "Critical", "Major", "Minor"] else 2, key=f"sev_{bug['ID']}")
-                    with b2:
-                        final_pri = st.selectbox("Priority:", options=["P0", "P1", "P2", "P3"], index=["P0", "P1", "P2", "P3"].index(bug['Priority']) if bug['Priority'] in ["P0", "P1", "P2", "P3"] else 1, key=f"pri_{bug['ID']}")
-                        final_ass = st.text_input("Assigned To:", value=bug['Assigned_To'], key=f"ass_{bug['ID']}")
+                    mod_val = b1.text_input("Module:", value=bug.get("Module", ""), key=f"mod_{bug['ID']}", placeholder="Identify Module")
+                    current_data["tracker_df"].at[index, "Module"] = mod_val
+                    final_pri = b2.selectbox("Priority:", options=["P0", "P1", "P2", "P3"], index=["P0", "P1", "P2", "P3"].index(bug['Priority']) if bug['Priority'] in ["P0", "P1", "P2", "P3"] else 1, key=f"pri_{bug['ID']}")
 
+                    # Row 2: Severity & Assigned To
+                    s1, s2 = st.columns(2)
+                    final_sev = s1.selectbox("Severity:", options=["Blocker", "Critical", "Major", "Minor"], index=["Blocker", "Critical", "Major", "Minor"].index(bug['Severity']) if bug['Severity'] in ["Blocker", "Critical", "Major", "Minor"] else 2, key=f"sev_{bug['ID']}")
+                    final_ass = s2.text_input("Assigned To:", value=bug['Assigned_To'], key=f"ass_{bug['ID']}")
+
+                    # Bug Description
                     bug_desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val}\n2. Perform: {bug['Scenario']}\n3. Observe failure.", key=f"desc_{bug['ID']}")
                     
+                    # REPOSITIONED: Evidence Link BELOW description box
                     st.markdown(f"**🔗 Evidence Link:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence Link:** None attached.")
 
+                    # Row 3: Expected & Actual
                     r1, r2 = st.columns(2)
-                    exp_val = r1.text_input("Expected:", value=bug['Expected'], key=f"exp_{bug['ID']}")
-                    act_val = r2.text_input("Actual:", value="Does not meet PRD criteria.", key=f"act_{bug['ID']}")
+                    exp_val = r1.text_input("Expected Result:", value=bug['Expected'], key=f"exp_{bug['ID']}")
+                    act_val = r2.text_input("Actual Result:", value="Does not meet PRD criteria.", key=f"act_{bug['ID']}")
 
-                    if st.button(f"Generate AI Jira Draft for {bug['ID']}", key=f"btn_{bug['ID']}"):
+                    if st.button(f"Generate Jira Draft for {bug['ID']}", key=f"btn_{bug['ID']}"):
                         prompt = f"Module: {mod_val}\nDescription: {bug_desc}\nExpected: {exp_val}\nActual: {act_val}\nSeverity: {final_sev}\nPriority: {final_pri}\nEvidence: {bug['Evidence_Link']}"
-                        res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": f"Write a Jira bug report: {prompt}"}])
+                        res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": f"Write a professional Jira ticket: {prompt}"}])
                         st.code(res.choices[0].message.content)
