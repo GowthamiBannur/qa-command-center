@@ -52,7 +52,7 @@ if 'project_db' not in st.session_state:
                 "tracker_df": pd.DataFrame(p_val.get("tracker_dict", []))
             }
 
-# 4. Sidebar: Project Management, Health Chart, and Export
+# 4. Sidebar: Project Management
 with st.sidebar:
     st.title("🛡️ QA Hub Manager")
     existing_list = list(st.session_state.project_db.keys())
@@ -72,28 +72,22 @@ with st.sidebar:
 
     # MODULE HEALTH CHART
     st.markdown("---")
-    st.subheader("📊 Bug Density by Module")
+    st.subheader("📊 Bug Density")
     current_df = st.session_state.project_db[active_id]["tracker_df"]
     if not current_df.empty and "Fail" in current_df["Status"].values:
         fail_data = current_df[current_df["Status"] == "Fail"]
         clean_fail_data = fail_data[fail_data["Module"].str.strip() != ""]
         if not clean_fail_data.empty:
             st.bar_chart(clean_fail_data["Module"].value_counts())
-        else:
-            st.info("Assign modules in Bug Center for chart data.")
-    else:
-        st.success("Clean Build: No Bugs!")
-
+    
     # EXCEL EXPORT
-    st.markdown("---")
     if not current_df.empty:
         try:
             output = io.BytesIO()
             with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
                 current_df.to_excel(writer, index=False, sheet_name='Execution_Log')
-            st.download_button(label="📥 Export to Excel", data=output.getvalue(), file_name=f"{active_id}_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-        except:
-            st.warning("Excel Engine installing...")
+            st.download_button(label="📥 Export Report", data=output.getvalue(), file_name=f"{active_id}_Report.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+        except: pass
 
     if st.button("💾 Save All Changes"):
         save_data(st.session_state.project_db)
@@ -111,8 +105,6 @@ with tab1:
         st.subheader("📋 Requirements Document")
         user_req = st.text_area("Paste PRD here:", value=current_data.get("requirement", ""), height=350)
         current_data["requirement"] = user_req
-        platform = st.selectbox("Platform", ["Web", "Android", "iOS", "API"])
-
         if st.button("🚀 Audit PRD & Map Risk"):
             with st.spinner("Analyzing PRD..."):
                 prompt = f"Act as Principal QA. Analyze: {user_req}. 1. Identify 15+ test cases 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. 2. Provide 'RISK_REPORT' with markdown bullets."
@@ -151,7 +143,6 @@ with tab2:
     st.subheader(f"Execution Log: {active_id}")
     df = current_data.get("tracker_df", pd.DataFrame())
     if not df.empty:
-        # Full grid editing
         edited_df = st.data_editor(df, column_config={
                 "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
                 "Severity": st.column_config.SelectboxColumn("Severity", options=["Blocker", "Critical", "Major", "Minor"]),
@@ -160,17 +151,17 @@ with tab2:
         current_data["tracker_df"] = edited_df
 
         st.markdown("---")
-        st.subheader("🎥 Attach Evidence (Screen Recording/Screenshot)")
+        st.subheader("🎥 Attach Evidence (Screen Recording URL)")
         e_col1, e_col2 = st.columns([1, 2])
         with e_col1:
             tc_id = st.selectbox("Select Test Case ID:", options=edited_df["ID"])
         with e_col2:
-            link_val = st.text_input("Paste URL (Loom, Drive, Cloudinary):", placeholder="https://...")
+            link_val = st.text_input("Paste URL (Loom/Drive):", key="ev_input")
         
-        if st.button("🔗 Link Evidence to Test Case"):
+        if st.button("🔗 Save Link"):
             idx = current_data["tracker_df"].index[current_data["tracker_df"]["ID"] == tc_id][0]
             current_data["tracker_df"].at[idx, "Evidence_Link"] = link_val
-            st.success(f"Evidence linked to {tc_id}!")
+            st.success(f"Link saved to {tc_id}!")
     else:
         st.warning("Generate scenarios in Tab 1.")
 
@@ -178,7 +169,8 @@ with tab2:
 with tab3:
     st.subheader("🐞 Automated Bug Reporting")
     df_check = current_data.get("tracker_df", pd.DataFrame())
-    fails = df_check[df_check["Status"] == "Fail"] if not df_check.empty else pd.DataFrame()
+    # Identify Failures
+    fails = df_check[df_check["Status"] == "Fail"].copy()
     
     if fails.empty:
         st.info("No failures logged in Execution.")
@@ -195,24 +187,25 @@ with tab3:
             with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
                 b_col1, b_col2 = st.columns(2)
                 with b_col1:
-                    final_mod = st.text_input("Module Name:", value=found_mod if found_mod else bug.get("Module", ""), key=f"mod_{bug['ID']}", placeholder="e.g. Checkout")
+                    final_mod = st.text_input("Module:", value=found_mod if found_mod else bug.get("Module", ""), key=f"mod_{bug['ID']}")
                     current_data["tracker_df"].at[index, "Module"] = final_mod
                     final_sev = st.selectbox("Severity:", options=["Blocker", "Critical", "Major", "Minor"], index=["Blocker", "Critical", "Major", "Minor"].index(bug['Severity']) if bug['Severity'] in ["Blocker", "Critical", "Major", "Minor"] else 2, key=f"sev_{bug['ID']}")
                 with b_col2:
                     final_pri = st.selectbox("Priority:", options=["P0", "P1", "P2", "P3"], index=["P0", "P1", "P2", "P3"].index(bug['Priority']) if bug['Priority'] in ["P0", "P1", "P2", "P3"] else 1, key=f"pri_{bug['ID']}")
                     final_ass = st.text_input("Assigned To:", value=bug['Assigned_To'], key=f"ass_{bug['ID']}")
                 
-                # New Bug Description & Evidence Fields
-                st.markdown(f"**Linked Evidence:** {bug['Evidence_Link'] if bug['Evidence_Link'] else 'No link attached'}")
-                final_desc = st.text_area("Bug Description (Steps to Reproduce):", value=f"Requirement failure observed in {bug['Scenario']}.", key=f"desc_{bug['ID']}")
+                # REPAIRED: Evidence Link Display
+                st.markdown(f"**🔗 Evidence Link:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence Link:** None attached.")
+                
+                final_desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {final_mod if final_mod else 'Target Module'}\n2. Perform test scenario: {bug['Scenario']}\n3. Observe failure.", key=f"desc_{bug['ID']}")
                 
                 r_col1, r_col2 = st.columns(2)
                 with r_col1:
                     final_exp = st.text_input("Expected Result:", value=bug['Expected'], key=f"exp_{bug['ID']}")
                 with r_col2:
-                    final_act = st.text_input("Actual Result:", value="System failed to perform per PRD.", key=f"act_{bug['ID']}")
+                    final_act = st.text_input("Actual Result:", value="System did not match PRD criteria.", key=f"act_{bug['ID']}")
 
-                if st.button(f"Generate Final Jira Draft for {bug['ID']}", key=f"btn_{bug['ID']}"):
+                if st.button(f"Generate Jira Draft for {bug['ID']}", key=f"btn_{bug['ID']}"):
                     ctx = f"Project: {active_id}\nModule: {final_mod}\nDescription: {final_desc}\nExpected: {final_exp}\nActual: {final_act}\nSeverity: {final_sev}\nPriority: {final_pri}\nEvidence: {bug['Evidence_Link']}"
-                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": f"Write a detailed Jira bug report: {ctx}"}])
+                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": f"Write a professional Jira bug report with Steps to Reproduce: {ctx}"}])
                     st.code(res.choices[0].message.content)
