@@ -20,6 +20,7 @@ DB_FILE = "qa_database.json"
 DEFAULT_COLS = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module"]
 
 def clean_text(text):
+    """Removes ** and __ artifacts from AI text"""
     return re.sub(r'\*\*|__', '', str(text)).strip()
 
 def load_data():
@@ -39,7 +40,7 @@ def save_data(data):
         }
     with open(DB_FILE, "w") as f: json.dump(serializable, f)
 
-# Initialize Session State
+# Initialize Session State & Ensure Columns Exist
 if 'project_db' not in st.session_state:
     loaded = load_data()
     st.session_state.project_db = {}
@@ -56,30 +57,17 @@ if 'project_db' not in st.session_state:
 with st.sidebar:
     st.title("🛡️ QA Hub Manager")
     existing_list = list(st.session_state.project_db.keys())
-    selected_project = st.selectbox("Active Project:", options=existing_list + ["+ New Project"])
+    active_id = st.selectbox("Active Project:", options=existing_list)
     
-    if selected_project == "+ New Project":
-        new_name = st.text_input("New Project Name:")
-        if st.button("Create"):
-            st.session_state.project_db[new_name] = {"requirement": "", "risk_summary": "", "tracker_df": pd.DataFrame(columns=DEFAULT_COLS)}
-            st.rerun()
-        active_id = existing_list[0]
-    else:
-        active_id = selected_project
-
     st.markdown("---")
     st.subheader("✉️ Notification Settings")
-    manager_cc = st.text_input("CC Manager Email:", placeholder="manager@company.com")
+    manager_cc = st.text_input("CC Manager Email:", placeholder="manager@company.com", key="mgr_cc_sidebar")
     
-    if st.button("💾 Save All Changes"):
+    if st.button("💾 Save All Progress"):
         save_data(st.session_state.project_db)
-        st.success("All Project Data Saved!")
+        st.success("Changes Saved Successfully!")
 
 current_data = st.session_state.project_db[active_id]
-
-# CRASH PROTECTION: Ensure columns exist before UI loads
-if current_data["tracker_df"].empty or "Status" not in current_data["tracker_df"].columns:
-    current_data["tracker_df"] = pd.DataFrame(columns=DEFAULT_COLS)
 
 # 5. UI Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ PRD & Risk Analysis", "✅ Execution Log", "🐞 Bug Center"])
@@ -91,25 +79,35 @@ with tab1:
         st.subheader("📋 Requirements Document")
         user_req = st.text_area("Paste PRD here:", value=current_data.get("requirement", ""), height=400)
         current_data["requirement"] = user_req
+        
         if st.button("🚀 Audit PRD & Map Risk"):
-            with st.spinner("Analyzing Risks..."):
-                prompt = f"Analyze PRD: {user_req}. 1. Cases: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. 2. 'RISK_REPORT' section."
+            with st.spinner("Analyzing Risks & Scenarios..."):
+                prompt = f"Analyze PRD: {user_req}. 1. Generate 15+ cases: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. 2. Provide a 'RISK_REPORT' section."
                 res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
+                
                 if "RISK_REPORT" in res:
                     parts = res.split("RISK_REPORT")
                     current_data["risk_summary"] = parts[1].strip()
+                
                 lines = [l.replace("CASE:", "").strip() for l in res.split("\n") if "CASE:" in l]
                 rows = []
                 for i, l in enumerate(lines):
                     p = l.split("|")
-                    rows.append({"ID": f"TC-{i+1}", "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]), "Status": "Pending", "Severity": clean_text(p[2]), "Priority": clean_text(p[3]), "Evidence_Link": "", "Assigned_To": "dev@company.com", "Module": ""})
+                    rows.append({
+                        "ID": f"TC-{i+1}", "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]),
+                        "Status": "Pending", "Severity": clean_text(p[2]), "Priority": clean_text(p[3]), 
+                        "Evidence_Link": "", "Assigned_To": "dev@example.com", "Module": ""
+                    })
                 current_data["tracker_df"] = pd.DataFrame(rows)
                 st.rerun()
+
     with col2:
-        st.subheader("🔥 AI Risk & Mitigation")
-        if current_data.get("risk_summary"): st.info(current_data["risk_summary"])
-        st.divider()
-        st.subheader("🔍 Generated Test Suite")
+        if current_data.get("risk_summary"):
+            st.subheader("🔥 AI Risk & Mitigation")
+            st.info(current_data["risk_summary"])
+            st.divider()
+        
+        st.subheader("🔍 Test Suite View")
         if not current_data["tracker_df"].empty:
             st.dataframe(current_data["tracker_df"][["ID", "Scenario", "Severity", "Priority"]], use_container_width=True, hide_index=True)
 
@@ -119,40 +117,53 @@ with tab2:
     if not current_data["tracker_df"].empty:
         edited_df = st.data_editor(current_data["tracker_df"], column_config={
                 "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
-                "Assigned_To": st.column_config.TextColumn("Developer Email"),
+                "Assigned_To": st.column_config.TextColumn("Dev Email"),
                 "Evidence_Link": st.column_config.LinkColumn("Evidence Link")
-            }, use_container_width=True, key=f"editor_{active_id}")
+            }, use_container_width=True, key=f"edit_{active_id}")
         current_data["tracker_df"] = edited_df
 
 # --- TAB 3: BUG CENTER ---
 with tab3:
     st.subheader("🐞 Bug Reporter")
-    # SAFE FILTERING: Prevents KeyError by checking if column exists
-    df_temp = current_data["tracker_df"]
-    fails = df_temp[df_temp["Status"] == "Fail"].copy() if "Status" in df_temp.columns else pd.DataFrame()
-    
-    if fails.empty:
-        st.info("No failures logged.")
-    else:
-        for idx, bug in fails.iterrows():
-            with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
-                b1, b2 = st.columns(2)
-                dev_email = b1.text_input("Assigned To:", value=bug['Assigned_To'], key=f"em_{bug['ID']}")
-                current_data["tracker_df"].at[idx, "Assigned_To"] = dev_email
-                mod_val = b2.text_input("Module:", value=bug.get("Module", ""), key=f"md_{bug['ID']}")
-                current_data["tracker_df"].at[idx, "Module"] = mod_val
-                
-                s1, s2 = st.columns(2)
-                sev = s1.selectbox("Severity:", ["Blocker", "Critical", "Major", "Minor"], index=2, key=f"sv_{bug['ID']}")
-                pri = s2.selectbox("Priority:", ["P0", "P1", "P2", "P3"], index=1, key=f"pr_{bug['ID']}")
-                
-                desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val}\n2. Perform: {bug['Scenario']}\n3. Observe: Failure.", key=f"ds_{bug['ID']}")
-                st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence:** None.")
-                
-                r1, r2 = st.columns(2)
-                exp = r1.text_input("Expected:", value=bug['Expected'], key=f"ex_{bug['ID']}")
-                act = r2.text_input("Actual:", value="Result failed PRD criteria.", key=f"ac_{bug['ID']}")
+    # CRASH GUARD: Ensure df is valid before filtering
+    df_for_bugs = current_data["tracker_df"]
+    if not df_for_bugs.empty and "Status" in df_for_bugs.columns:
+        fails = df_for_bugs[df_for_bugs["Status"] == "Fail"].copy()
+        
+        if fails.empty:
+            st.info("No failures logged.")
+        else:
+            for idx, bug in fails.iterrows():
+                with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
+                    # ROW 1: Module & Severity
+                    c1, c2 = st.columns(2)
+                    mod_val = c1.text_input("Module:", value=bug.get("Module", ""), key=f"m_{bug['ID']}")
+                    current_data["tracker_df"].at[idx, "Module"] = mod_val
+                    sev = c2.selectbox("Severity:", ["Blocker", "Critical", "Major", "Minor"], index=2, key=f"s_{bug['ID']}")
+                    
+                    # ROW 2: Priority & Assigned To
+                    c3, c4 = st.columns(2)
+                    pri = c3.selectbox("Priority:", ["P0", "P1", "P2", "P3"], index=1, key=f"p_{bug['ID']}")
+                    dev_email = c4.text_input("Assigned To:", value=bug['Assigned_To'], key=f"e_{bug['ID']}")
+                    current_data["tracker_df"].at[idx, "Assigned_To"] = dev_email
 
-                params = {"subject": f"[{sev}] Bug Report: {bug['ID']}", "body": f"Scenario: {bug['Scenario']}\nSteps: {desc}\nEvidence: {bug['Evidence_Link']}", "cc": manager_cc if manager_cc else ""}
-                mailto_link = f"mailto:{dev_email}?" + urllib.parse.urlencode(params).replace('+', '%20')
-                st.markdown(f'<a href="{mailto_link}" style="padding: 10px; background-color: #ff4b4b; color: white; border-radius: 5px; text-decoration: none;">📧 Email Bug (CC Manager)</a>', unsafe_allow_html=True)
+                    # DESCRIPTION BOX
+                    desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val}\n2. Perform: {bug['Scenario']}\n3. Observe Failure.", key=f"d_{bug['ID']}")
+                    
+                    # EVIDENCE LINK (BELOW DESCRIPTION)
+                    st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence:** None.")
+
+                    # ROW 3: Expected & Actual
+                    c5, c6 = st.columns(2)
+                    exp = c5.text_input("Expected:", value=bug['Expected'], key=f"exp_{bug['ID']}")
+                    act = c6.text_input("Actual:", value="Does not match PRD criteria.", key=f"act_{bug['ID']}")
+
+                    # EMAIL INTEGRATION
+                    subject = f"[{sev}] BUG: {bug['ID']} - {active_id}"
+                    body = f"Bug details assigned to you:\n\nScenario: {bug['Scenario']}\nSteps: {desc}\nExpected: {exp}\nEvidence: {bug['Evidence_Link']}"
+                    params = {"subject": subject, "body": body, "cc": manager_cc if manager_cc else ""}
+                    mailto_link = f"mailto:{dev_email}?" + urllib.parse.urlencode(params).replace('+', '%20')
+                    
+                    st.markdown(f'<a href="{mailto_link}" style="padding: 10px; background-color: #ff4b4b; color: white; border-radius: 5px; text-decoration: none;">📧 Email Bug (CC Manager)</a>', unsafe_allow_html=True)
+    else:
+        st.warning("Audit PRD in Tab 1 to begin.")
