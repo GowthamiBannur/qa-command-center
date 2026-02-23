@@ -5,6 +5,7 @@ import json
 import os
 import io
 import re
+import urllib.parse
 
 # 1. Page Config
 st.set_page_config(page_title="Principal AI QA Hub", layout="wide", page_icon="🛡️")
@@ -35,9 +36,8 @@ def save_data(data):
         }
     with open(DB_FILE, "w") as f: json.dump(serializable, f)
 
-# Helper to remove AI markdown artifacts like **
 def clean_text(text):
-    return re.sub(r'\*\*|__', '', text).strip()
+    return re.sub(r'\*\*|__', '', str(text)).strip()
 
 # Initialize Session State
 DEFAULT_COLS = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module"]
@@ -83,7 +83,7 @@ current_data = st.session_state.project_db[active_id]
 # 5. UI Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ PRD & Risk Analysis", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: PRD ANALYSIS (Cleaning Fix Applied) ---
+# --- TAB 1: PRD ANALYSIS ---
 with tab1:
     col1, col2 = st.columns([1, 1.2])
     with col1:
@@ -92,41 +92,30 @@ with tab1:
         current_data["requirement"] = user_req
         
         if st.button("🚀 Audit PRD & Map Risk"):
-            with st.spinner("Analyzing Risks & Mitigation..."):
-                prompt = f"""Analyze PRD: {user_req}. 
-                1. Generate 15+ test cases in format: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'.
-                2. Provide a 'RISK_REPORT' section with Mitigation strategies."""
-                
+            with st.spinner("Analyzing Risks..."):
+                prompt = f"Analyze PRD: {user_req}. 1. Cases: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. 2. 'RISK_REPORT' with mitigation."
                 response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
                 full_res = response.choices[0].message.content
-                
                 if "RISK_REPORT" in full_res:
                     parts = full_res.split("RISK_REPORT")
                     current_data["risk_summary"] = parts[1]
-                
                 lines = [l.replace("CASE:", "").strip() for l in full_res.split("\n") if "CASE:" in l]
                 rows = []
                 for i, l in enumerate(lines):
                     p = l.split("|")
                     rows.append({
-                        "ID": f"TC-{i+1}", 
-                        "Scenario": clean_text(p[0]) if len(p)>0 else "N/A", # Asterisk Cleaning
-                        "Expected": clean_text(p[1]) if len(p)>1 else "Pass", # Asterisk Cleaning
-                        "Status": "Pending", 
-                        "Severity": clean_text(p[2]) if len(p)>2 else "Major",
-                        "Priority": clean_text(p[3]) if len(p)>3 else "P1", 
-                        "Evidence_Link": "", "Assigned_To": "Developer", "Module": ""
+                        "ID": f"TC-{i+1}", "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]),
+                        "Status": "Pending", "Severity": clean_text(p[2]), "Priority": clean_text(p[3]), 
+                        "Evidence_Link": "", "Assigned_To": "developer@example.com", "Module": ""
                     })
                 current_data["tracker_df"] = pd.DataFrame(rows)
                 st.rerun()
 
     with col2:
         if current_data.get("risk_summary"):
-            st.subheader("🔥 Risk & Mitigation Strategy")
-            st.info(current_data["risk_summary"]) # Restored
-            st.divider()
-            
-        st.subheader("🔍 Structured Test Suite")
+            st.subheader("🔥 Risk & Mitigation")
+            st.info(current_data["risk_summary"])
+        st.subheader("🔍 Structured Suite")
         if not current_data["tracker_df"].empty:
             st.dataframe(current_data["tracker_df"][["ID", "Scenario", "Severity", "Priority"]], use_container_width=True, hide_index=True)
 
@@ -134,60 +123,45 @@ with tab1:
 with tab2:
     st.subheader(f"Execution Log: {active_id}")
     df = current_data.get("tracker_df", pd.DataFrame())
-    
-    if not df.empty and "Status" in df.columns:
+    if not df.empty:
+        # Syncing data back to session state via data_editor
         edited_df = st.data_editor(df, column_config={
                 "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
+                "Assigned_To": st.column_config.TextColumn("Assigned To (Email)"),
                 "Evidence_Link": st.column_config.LinkColumn("Evidence Link")
             }, use_container_width=True, key=f"editor_{active_id}")
         current_data["tracker_df"] = edited_df
-        
-        st.markdown("---")
-        st.subheader("🎥 Attach Evidence Link")
-        ec1, ec2 = st.columns([1, 2])
-        target_tc = ec1.selectbox("Select TC:", options=edited_df["ID"])
-        link_val = ec2.text_input("Paste URL (Loom/Drive):")
-        if st.button("🔗 Save Link"):
-            idx = current_data["tracker_df"].index[current_data["tracker_df"]["ID"] == target_tc][0]
-            current_data["tracker_df"].at[idx, "Evidence_Link"] = link_val
-            st.success("Link Saved!")
 
-# --- TAB 3: BUG CENTER (Fields Restored + Evidence Below Description) ---
+# --- TAB 3: BUG CENTER (Sync & Notify) ---
 with tab3:
-    st.subheader("🐞 Bug Center")
+    st.subheader("🐞 Bug Center & Notifications")
     df_check = current_data.get("tracker_df", pd.DataFrame())
+    fails = df_check[df_check["Status"] == "Fail"].copy()
     
-    if not df_check.empty and "Status" in df_check.columns:
-        fails = df_check[df_check["Status"] == "Fail"].copy()
-        
-        if fails.empty:
-            st.info("No failures logged.")
-        else:
-            for index, bug in fails.iterrows():
-                with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
-                    # Row 1: Module & Priority
-                    b1, b2 = st.columns(2)
-                    mod_val = b1.text_input("Module:", value=bug.get("Module", ""), key=f"mod_{bug['ID']}", placeholder="Identify Module")
-                    current_data["tracker_df"].at[index, "Module"] = mod_val
-                    final_pri = b2.selectbox("Priority:", options=["P0", "P1", "P2", "P3"], index=["P0", "P1", "P2", "P3"].index(bug['Priority']) if bug['Priority'] in ["P0", "P1", "P2", "P3"] else 1, key=f"pri_{bug['ID']}")
+    if fails.empty:
+        st.info("No failures logged.")
+    else:
+        for index, bug in fails.iterrows():
+            with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
+                b1, b2 = st.columns(2)
+                # Field Sync: Pulls directly from the dataframe edited in Tab 2
+                dev_email = b1.text_input("Assigned To:", value=bug['Assigned_To'], key=f"email_{bug['ID']}")
+                current_data["tracker_df"].at[index, "Assigned_To"] = dev_email
+                
+                mod_val = b2.text_input("Module:", value=bug.get("Module", ""), key=f"mod_{bug['ID']}")
+                current_data["tracker_df"].at[index, "Module"] = mod_val
+                
+                bug_desc = st.text_area("Bug Description / Steps:", value=f"1. Open App\n2. Perform: {bug['Scenario']}\n3. Observed Fail.", key=f"desc_{bug['ID']}")
+                st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence:** None.")
 
-                    # Row 2: Severity & Assigned To
-                    s1, s2 = st.columns(2)
-                    final_sev = s1.selectbox("Severity:", options=["Blocker", "Critical", "Major", "Minor"], index=["Blocker", "Critical", "Major", "Minor"].index(bug['Severity']) if bug['Severity'] in ["Blocker", "Critical", "Major", "Minor"] else 2, key=f"sev_{bug['ID']}")
-                    final_ass = s2.text_input("Assigned To:", value=bug['Assigned_To'], key=f"ass_{bug['ID']}")
+                # Email Logic
+                subject = f"BUG REPORT: {bug['ID']} - {active_id}"
+                body = f"Hi,\n\nA bug has been assigned to you.\n\nScenario: {bug['Scenario']}\nExpected: {bug['Expected']}\nDescription: {bug_desc}\nEvidence: {bug['Evidence_Link']}\n\nPlease review."
+                mailto_link = f"mailto:{dev_email}?subject={urllib.parse.quote(subject)}&body={urllib.parse.quote(body)}"
+                
+                st.markdown(f'<a href="{mailto_link}" style="padding: 10px; background-color: #ff4b4b; color: white; border-radius: 5px; text-decoration: none;">📧 Send Bug to Developer</a>', unsafe_allow_content_allowed=True)
 
-                    # Bug Description
-                    bug_desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val}\n2. Perform: {bug['Scenario']}\n3. Observe failure.", key=f"desc_{bug['ID']}")
-                    
-                    # REPOSITIONED: Evidence Link BELOW description box
-                    st.markdown(f"**🔗 Evidence Link:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence Link:** None attached.")
-
-                    # Row 3: Expected & Actual
-                    r1, r2 = st.columns(2)
-                    exp_val = r1.text_input("Expected Result:", value=bug['Expected'], key=f"exp_{bug['ID']}")
-                    act_val = r2.text_input("Actual Result:", value="Does not meet PRD criteria.", key=f"act_{bug['ID']}")
-
-                    if st.button(f"Generate Jira Draft for {bug['ID']}", key=f"btn_{bug['ID']}"):
-                        prompt = f"Module: {mod_val}\nDescription: {bug_desc}\nExpected: {exp_val}\nActual: {act_val}\nSeverity: {final_sev}\nPriority: {final_pri}\nEvidence: {bug['Evidence_Link']}"
-                        res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": f"Write a professional Jira ticket: {prompt}"}])
-                        st.code(res.choices[0].message.content)
+                if st.button(f"Generate AI Jira Draft for {bug['ID']}", key=f"btn_{bug['ID']}"):
+                    prompt = f"Ticket for: {bug['Scenario']}\nAssigned: {dev_email}\nDetails: {bug_desc}"
+                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
+                    st.code(res.choices[0].message.content)
