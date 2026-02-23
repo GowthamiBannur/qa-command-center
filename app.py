@@ -17,9 +17,9 @@ except Exception:
 
 # 3. Data Persistence & Cleanup
 DB_FILE = "qa_database.json"
+DEFAULT_COLS = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module"]
 
 def clean_text(text):
-    """Strips all AI markdown artifacts like ** or __"""
     return re.sub(r'\*\*|__', '', str(text)).strip()
 
 def load_data():
@@ -40,8 +40,6 @@ def save_data(data):
     with open(DB_FILE, "w") as f: json.dump(serializable, f)
 
 # Initialize Session State
-DEFAULT_COLS = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module"]
-
 if 'project_db' not in st.session_state:
     loaded = load_data()
     st.session_state.project_db = {}
@@ -52,78 +50,64 @@ if 'project_db' not in st.session_state:
             df = pd.DataFrame(p_val.get("tracker_dict", []))
             for col in DEFAULT_COLS:
                 if col not in df.columns: df[col] = ""
-            st.session_state.project_db[p_id] = {
-                "requirement": p_val.get("requirement", ""),
-                "risk_summary": p_val.get("risk_summary", ""),
-                "tracker_df": df
-            }
+            st.session_state.project_db[p_id] = {"requirement": p_val.get("requirement", ""), "risk_summary": p_val.get("risk_summary", ""), "tracker_df": df}
 
-# 4. Sidebar (Features: Project Switch + CC Manager)
+# 4. Sidebar
 with st.sidebar:
     st.title("🛡️ QA Hub Manager")
-    active_id = st.selectbox("Active Project:", options=list(st.session_state.project_db.keys()))
+    existing_list = list(st.session_state.project_db.keys())
+    selected_project = st.selectbox("Active Project:", options=existing_list + ["+ New Project"])
     
+    if selected_project == "+ New Project":
+        new_name = st.text_input("New Project Name:")
+        if st.button("Create"):
+            st.session_state.project_db[new_name] = {"requirement": "", "risk_summary": "", "tracker_df": pd.DataFrame(columns=DEFAULT_COLS)}
+            st.rerun()
+        active_id = existing_list[0]
+    else:
+        active_id = selected_project
+
     st.markdown("---")
     st.subheader("✉️ Notification Settings")
     manager_cc = st.text_input("CC Manager Email:", placeholder="manager@company.com")
     
-    st.markdown("---")
     if st.button("💾 Save All Changes"):
         save_data(st.session_state.project_db)
         st.success("All Project Data Saved!")
 
 current_data = st.session_state.project_db[active_id]
 
+# CRASH PROTECTION: Ensure columns exist before UI loads
+if current_data["tracker_df"].empty or "Status" not in current_data["tracker_df"].columns:
+    current_data["tracker_df"] = pd.DataFrame(columns=DEFAULT_COLS)
+
 # 5. UI Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ PRD & Risk Analysis", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: PRD & RISK (REFIXED & STABILIZED) ---
+# --- TAB 1: PRD & RISK ---
 with tab1:
     col1, col2 = st.columns([1, 1.2])
     with col1:
         st.subheader("📋 Requirements Document")
         user_req = st.text_area("Paste PRD here:", value=current_data.get("requirement", ""), height=400)
         current_data["requirement"] = user_req
-        
         if st.button("🚀 Audit PRD & Map Risk"):
-            with st.spinner("Generating 15+ Scenarios & Risk Report..."):
-                prompt = f"""Analyze PRD: {user_req}. 
-                1. Generate at least 15 comprehensive test cases. 
-                FORMAT FOR CASES: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'
-                2. Provide a 'RISK_REPORT' section detailing high-risk areas and mitigation strategies in Markdown."""
-                
-                response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
-                full_res = response.choices[0].message.content
-                
-                # Split Logic to capture Risk Report correctly
-                if "RISK_REPORT" in full_res:
-                    parts = full_res.split("RISK_REPORT")
+            with st.spinner("Analyzing Risks..."):
+                prompt = f"Analyze PRD: {user_req}. 1. Cases: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. 2. 'RISK_REPORT' section."
+                res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
+                if "RISK_REPORT" in res:
+                    parts = res.split("RISK_REPORT")
                     current_data["risk_summary"] = parts[1].strip()
-                
-                # Parse Cases
-                lines = [l.replace("CASE:", "").strip() for l in full_res.split("\n") if "CASE:" in l]
+                lines = [l.replace("CASE:", "").strip() for l in res.split("\n") if "CASE:" in l]
                 rows = []
                 for i, l in enumerate(lines):
                     p = l.split("|")
-                    rows.append({
-                        "ID": f"TC-{i+1}", 
-                        "Scenario": clean_text(p[0]) if len(p)>0 else "N/A", 
-                        "Expected": clean_text(p[1]) if len(p)>1 else "Pass",
-                        "Status": "Pending", 
-                        "Severity": clean_text(p[2]) if len(p)>2 else "Major",
-                        "Priority": clean_text(p[3]) if len(p)>3 else "P1", 
-                        "Evidence_Link": "", "Assigned_To": "dev@company.com", "Module": ""
-                    })
+                    rows.append({"ID": f"TC-{i+1}", "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]), "Status": "Pending", "Severity": clean_text(p[2]), "Priority": clean_text(p[3]), "Evidence_Link": "", "Assigned_To": "dev@company.com", "Module": ""})
                 current_data["tracker_df"] = pd.DataFrame(rows)
                 st.rerun()
-
     with col2:
-        st.subheader("🔥 AI Risk & Mitigation Strategy")
-        if current_data.get("risk_summary"):
-            st.info(current_data["risk_summary"])
-        else:
-            st.warning("No Risk Report generated yet. Click 'Audit PRD'.")
-        
+        st.subheader("🔥 AI Risk & Mitigation")
+        if current_data.get("risk_summary"): st.info(current_data["risk_summary"])
         st.divider()
         st.subheader("🔍 Generated Test Suite")
         if not current_data["tracker_df"].empty:
@@ -140,45 +124,35 @@ with tab2:
             }, use_container_width=True, key=f"editor_{active_id}")
         current_data["tracker_df"] = edited_df
 
-# --- TAB 3: BUG CENTER (CC Notification Enabled) ---
+# --- TAB 3: BUG CENTER ---
 with tab3:
     st.subheader("🐞 Bug Reporter")
-    fails = current_data["tracker_df"][current_data["tracker_df"]["Status"] == "Fail"].copy()
+    # SAFE FILTERING: Prevents KeyError by checking if column exists
+    df_temp = current_data["tracker_df"]
+    fails = df_temp[df_temp["Status"] == "Fail"].copy() if "Status" in df_temp.columns else pd.DataFrame()
     
     if fails.empty:
-        st.info("No failures logged in the Execution Log.")
+        st.info("No failures logged.")
     else:
         for idx, bug in fails.iterrows():
             with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
                 b1, b2 = st.columns(2)
                 dev_email = b1.text_input("Assigned To:", value=bug['Assigned_To'], key=f"em_{bug['ID']}")
                 current_data["tracker_df"].at[idx, "Assigned_To"] = dev_email
-                mod_val = b2.text_input("Module:", value=bug.get("Module", ""), key=f"md_{bug['ID']}", placeholder="e.g., Checkout")
+                mod_val = b2.text_input("Module:", value=bug.get("Module", ""), key=f"md_{bug['ID']}")
                 current_data["tracker_df"].at[idx, "Module"] = mod_val
-
+                
                 s1, s2 = st.columns(2)
                 sev = s1.selectbox("Severity:", ["Blocker", "Critical", "Major", "Minor"], index=2, key=f"sv_{bug['ID']}")
                 pri = s2.selectbox("Priority:", ["P0", "P1", "P2", "P3"], index=1, key=f"pr_{bug['ID']}")
-
-                desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val}\n2. Perform: {bug['Scenario']}\n3. Observe: Failure.", key=f"ds_{bug['ID']}")
                 
-                # POSITION: Evidence Link after description box
-                st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence:** None attached.")
-
+                desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val}\n2. Perform: {bug['Scenario']}\n3. Observe: Failure.", key=f"ds_{bug['ID']}")
+                st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence:** None.")
+                
                 r1, r2 = st.columns(2)
                 exp = r1.text_input("Expected:", value=bug['Expected'], key=f"ex_{bug['ID']}")
                 act = r2.text_input("Actual:", value="Result failed PRD criteria.", key=f"ac_{bug['ID']}")
 
-                # Email Logic with CC Support
-                subject = f"[{sev}] Bug Report: {bug['ID']} - {active_id}"
-                body = f"Bug details assigned to you:\n\nScenario: {bug['Scenario']}\nSteps: {desc}\nExpected: {exp}\nEvidence: {bug['Evidence_Link']}"
-                
-                params = {"subject": subject, "body": body, "cc": manager_cc if manager_cc else ""}
+                params = {"subject": f"[{sev}] Bug Report: {bug['ID']}", "body": f"Scenario: {bug['Scenario']}\nSteps: {desc}\nEvidence: {bug['Evidence_Link']}", "cc": manager_cc if manager_cc else ""}
                 mailto_link = f"mailto:{dev_email}?" + urllib.parse.urlencode(params).replace('+', '%20')
-                
                 st.markdown(f'<a href="{mailto_link}" style="padding: 10px; background-color: #ff4b4b; color: white; border-radius: 5px; text-decoration: none;">📧 Email Bug (CC Manager)</a>', unsafe_allow_html=True)
-
-                if st.button(f"Generate Jira Draft for {bug['ID']}", key=f"jr_{bug['ID']}"):
-                    prompt = f"Write a Jira ticket for {bug['Scenario']}. Module: {mod_val}. Sev: {sev}, Pri: {pri}."
-                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
-                    st.code(res.choices[0].message.content)
