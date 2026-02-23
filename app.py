@@ -68,39 +68,67 @@ with st.sidebar:
 current_data = st.session_state.project_db[active_id]
 
 # 5. UI Tabs
-tab1, tab2, tab3 = st.tabs(["🏗️ PRD & Risk Analysis", "✅ Execution Log", "🐞 Bug Center"])
+tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: PRD & RISK (RESTORED) ---
+# --- TAB 1: SENIOR QA AUDIT (ENHANCED ENGINE) ---
 with tab1:
     col1, col2 = st.columns([1, 1.2])
     with col1:
         st.subheader("📋 Requirements Document")
-        user_req = st.text_area("Paste PRD here:", value=current_data.get("requirement", ""), height=400)
+        user_req = st.text_area("Paste PRD here:", value=current_data.get("requirement", ""), height=400, placeholder="Paste the technical specs here...")
         current_data["requirement"] = user_req
-        if st.button("🚀 Audit PRD & Map Risk"):
-            with st.spinner("Generating 15+ Cases & Risk Report..."):
-                prompt = f"Analyze PRD: {user_req}. 1. Cases: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. 2. 'RISK_REPORT' section."
+        
+        if st.button("🚀 Run Deep Stress Audit"):
+            with st.spinner("Acting as Lead QA: Generating 30+ edge-case scenarios..."):
+                # ENHANCED PROMPT FOR SENIOR QA LOGIC
+                prompt = f"""
+                You are a Senior Lead QA Engineer. Analyze this PRD: {user_req}
+                
+                GOAL: Generate a comprehensive, high-coverage test suite of at least 30 test cases.
+                INCLUDE: 
+                - Positive/Happy path scenarios.
+                - Negative/Boundary value scenarios.
+                - Security & SQL Injection attempts.
+                - UI/UX edge cases & Performance stressors.
+                
+                FORMAT FOR CASES (MANDATORY): 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'
+                
+                Also, provide a 'RISK_REPORT' section identifying technical debt, security risks, and mitigation strategies.
+                """
+                
                 res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
+                
                 if "RISK_REPORT" in res:
                     parts = res.split("RISK_REPORT")
                     current_data["risk_summary"] = parts[1].strip()
+                
                 lines = [l.replace("CASE:", "").strip() for l in res.split("\n") if "CASE:" in l]
                 rows = []
                 for i, l in enumerate(lines):
                     p = l.split("|")
-                    rows.append({"ID": f"TC-{i+1}", "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]), "Status": "Pending", "Severity": clean_text(p[2]), "Priority": clean_text(p[3]), "Evidence_Link": "", "Assigned_To": "dev@company.com", "Module": ""})
+                    if len(p) >= 2:
+                        rows.append({
+                            "ID": f"TC-{i+1}", 
+                            "Scenario": clean_text(p[0]), 
+                            "Expected": clean_text(p[1]), 
+                            "Status": "Pending", 
+                            "Severity": clean_text(p[2]) if len(p)>2 else "Major", 
+                            "Priority": clean_text(p[3]) if len(p)>3 else "P1", 
+                            "Evidence_Link": "", "Assigned_To": "dev@company.com", "Module": ""
+                        })
                 current_data["tracker_df"] = pd.DataFrame(rows)
                 st.rerun()
     with col2:
         if current_data.get("risk_summary"):
-            st.subheader("🔥 AI Risk & Mitigation")
+            st.subheader("🔥 Strategic Risk Assessment")
             st.info(current_data["risk_summary"])
             st.divider()
-        st.subheader("🔍 Test Suite View")
+        st.subheader("🔍 Master Test Suite")
         if not current_data["tracker_df"].empty:
+            st.write(f"Total Scenarios Generated: **{len(current_data['tracker_df'])}**")
             st.dataframe(current_data["tracker_df"][["ID", "Scenario", "Severity", "Priority"]], use_container_width=True, hide_index=True)
 
-# --- TAB 2: EXECUTION LOG (RESTORED EVIDENCE ATTACH FIELD) ---
+# --- TAB 2: EXECUTION LOG (RETAINED FEATURES) ---
 with tab2:
     st.subheader(f"Execution Log: {active_id}")
     if not current_data["tracker_df"].empty:
@@ -111,26 +139,25 @@ with tab2:
             }, use_container_width=True, key=f"edit_log_{active_id}")
         current_data["tracker_df"] = edited_df
         
-        # --- FEATURE RESTORED: ATTACH EVIDENCE FIELD ---
         st.markdown("---")
         st.subheader("🎥 Attach Evidence Link")
         ec1, ec2 = st.columns([1, 2])
         target_tc = ec1.selectbox("Select TC ID:", options=edited_df["ID"])
-        link_val = ec2.text_input("Paste Evidence URL (Loom/Drive/S3):", key="ev_input")
+        link_val = ec2.text_input("Paste Evidence URL:", key="ev_input")
         if st.button("🔗 Save Link to Case"):
             idx = current_data["tracker_df"].index[current_data["tracker_df"]["ID"] == target_tc][0]
             current_data["tracker_df"].at[idx, "Evidence_Link"] = link_val
-            st.success(f"Link added to {target_tc}!")
+            st.success(f"Evidence linked to {target_tc}!")
             st.rerun()
 
-# --- TAB 3: BUG CENTER (UNCHANGED) ---
+# --- TAB 3: BUG CENTER (RETAINED FEATURES) ---
 with tab3:
-    st.subheader("🐞 Bug Reporter")
+    st.subheader("🐞 Senior Bug Reporter")
     df_bugs = current_data["tracker_df"]
     if not df_bugs.empty and "Status" in df_bugs.columns:
         fails = df_bugs[df_bugs["Status"] == "Fail"].copy()
         if fails.empty:
-            st.info("No failures logged.")
+            st.info("No failures logged. Great work!")
         else:
             for idx, bug in fails.iterrows():
                 with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
@@ -149,10 +176,10 @@ with tab3:
 
                     c5, c6 = st.columns(2)
                     exp = c5.text_input("Expected:", value=bug['Expected'], key=f"exp_{bug['ID']}")
-                    act = c6.text_input("Actual:", value="Does not match PRD criteria.", key=f"act_{bug['ID']}")
+                    act = c6.text_input("Actual:", value="Result failed PRD criteria.", key=f"act_{bug['ID']}")
 
                     subject = f"[{sev}] BUG: {bug['ID']} - {active_id}"
-                    body = f"Bug details assigned to you:\n\nScenario: {bug['Scenario']}\nSteps: {desc}\nExpected: {exp}\nEvidence: {bug['Evidence_Link']}"
+                    body = f"Review required:\n\nScenario: {bug['Scenario']}\nSteps: {desc}\nExpected: {exp}\nEvidence: {bug['Evidence_Link']}"
                     params = {"subject": subject, "body": body, "cc": manager_cc if manager_cc else ""}
                     mailto_link = f"mailto:{dev_email}?" + urllib.parse.urlencode(params).replace('+', '%20')
                     st.markdown(f'<a href="{mailto_link}" style="padding: 10px; background-color: #ff4b4b; color: white; border-radius: 5px; text-decoration: none;">📧 Email Bug (CC Manager)</a>', unsafe_allow_html=True)
