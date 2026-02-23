@@ -3,7 +3,6 @@ import pandas as pd
 from openai import OpenAI
 import json
 import os
-import io
 import re
 import urllib.parse
 
@@ -54,20 +53,26 @@ if 'project_db' not in st.session_state:
                 if col not in df.columns: df[col] = ""
             st.session_state.project_db[p_id] = {"requirement": p_val.get("requirement", ""), "risk_summary": p_val.get("risk_summary", ""), "tracker_df": df}
 
-# 4. Sidebar
+# 4. Sidebar with CC Manager Feature
 with st.sidebar:
     st.title("🛡️ QA Hub Manager")
     active_id = st.selectbox("Active Project:", options=list(st.session_state.project_db.keys()))
+    
+    st.markdown("---")
+    st.subheader("✉️ Notification Settings")
+    manager_cc = st.text_input("CC Manager Email:", placeholder="manager@company.com")
+    
+    st.markdown("---")
     if st.button("💾 Save All Changes"):
         save_data(st.session_state.project_db)
-        st.success("Data Secured!")
+        st.success("Configuration Saved!")
 
 current_data = st.session_state.project_db[active_id]
 
 # 5. UI Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ PRD & Risk Analysis", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: PRD ANALYSIS ---
+# --- TAB 1: PRD & RISK ---
 with tab1:
     col1, col2 = st.columns([1, 1.2])
     with col1:
@@ -76,7 +81,7 @@ with tab1:
         current_data["requirement"] = user_req
         if st.button("🚀 Audit PRD & Map Risk"):
             with st.spinner("Analyzing..."):
-                prompt = f"Analyze: {user_req}. 1. Cases: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. 2. 'RISK_REPORT' section."
+                prompt = f"Analyze PRD: {user_req}. 1. Cases: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. 2. 'RISK_REPORT' section."
                 res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
                 if "RISK_REPORT" in res:
                     parts = res.split("RISK_REPORT")
@@ -85,15 +90,15 @@ with tab1:
                 rows = []
                 for i, l in enumerate(lines):
                     p = l.split("|")
-                    rows.append({"ID": f"TC-{i+1}", "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]), "Status": "Pending", "Severity": clean_text(p[2]), "Priority": clean_text(p[3]), "Evidence_Link": "", "Assigned_To": "dev@company.com", "Module": ""})
+                    rows.append({"ID": f"TC-{i+1}", "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]), "Status": "Pending", "Severity": clean_text(p[2]), "Priority": clean_text(p[3]), "Evidence_Link": "", "Assigned_To": "dev@example.com", "Module": ""})
                 current_data["tracker_df"] = pd.DataFrame(rows)
                 st.rerun()
     with col2:
         if current_data.get("risk_summary"):
-            st.subheader("🔥 Risk & Mitigation")
+            st.subheader("🔥 Risk & Mitigation Strategy")
             st.info(current_data["risk_summary"])
-        st.subheader("🔍 Test Suite")
         if not current_data["tracker_df"].empty:
+            st.subheader("🔍 Structured Suite")
             st.dataframe(current_data["tracker_df"][["ID", "Scenario", "Severity", "Priority"]], use_container_width=True, hide_index=True)
 
 # --- TAB 2: EXECUTION LOG ---
@@ -110,11 +115,10 @@ with tab2:
 # --- TAB 3: BUG CENTER ---
 with tab3:
     st.subheader("🐞 Bug Reporter")
-    df = current_data.get("tracker_df", pd.DataFrame())
-    fails = df[df["Status"] == "Fail"].copy()
+    fails = current_data["tracker_df"][current_data["tracker_df"]["Status"] == "Fail"].copy()
     
     if fails.empty:
-        st.info("No failures found.")
+        st.info("No failures logged.")
     else:
         for idx, bug in fails.iterrows():
             with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
@@ -129,19 +133,27 @@ with tab3:
                 pri = s2.selectbox("Priority:", ["P0", "P1", "P2", "P3"], index=1, key=f"pr_{bug['ID']}")
 
                 desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val}\n2. Perform: {bug['Scenario']}\n3. Observe: Failure.", key=f"ds_{bug['ID']}")
-                
-                # REPOSITIONED: Evidence Link after Description
                 st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence:** None.")
 
                 r1, r2 = st.columns(2)
                 exp = r1.text_input("Expected:", value=bug['Expected'], key=f"ex_{bug['ID']}")
                 act = r2.text_input("Actual:", value="Result failed PRD criteria.", key=f"ac_{bug['ID']}")
 
-                # Email Logic with FIXED parameter
-                sub = f"Bug Found: {bug['ID']} - {active_id}"
-                body = f"Assigned to you:\n\nScenario: {bug['Scenario']}\nDetails: {desc}\nEvidence: {bug['Evidence_Link']}"
-                mailto = f"mailto:{dev_email}?subject={urllib.parse.quote(sub)}&body={urllib.parse.quote(body)}"
-                st.markdown(f'<a href="{mailto}" style="padding: 10px; background-color: #ff4b4b; color: white; border-radius: 5px; text-decoration: none;">📧 Email Developer</a>', unsafe_allow_html=True)
+                # Email Logic with CC Integration
+                sub = f"[{sev}] Bug Found: {bug['ID']} - {active_id}"
+                body = f"Assigned to you:\n\nScenario: {bug['Scenario']}\nExpected: {exp}\nDescription: {desc}\nEvidence: {bug['Evidence_Link']}"
+                
+                # Constructing mailto with CC
+                mailto_params = {
+                    "subject": sub,
+                    "body": body,
+                    "cc": manager_cc if manager_cc else ""
+                }
+                mailto_link = f"mailto:{dev_email}?" + urllib.parse.urlencode(mailto_params).replace('+', '%20')
+                
+                st.markdown(f'<a href="{mailto_link}" style="padding: 10px; background-color: #ff4b4b; color: white; border-radius: 5px; text-decoration: none;">📧 Email Bug to Dev + CC Manager</a>', unsafe_allow_html=True)
 
                 if st.button(f"Generate Jira Draft for {bug['ID']}", key=f"jr_{bug['ID']}"):
-                    st.code(f"AI generating for {bug['ID']}...")
+                    prompt = f"Write a Jira ticket for {bug['Scenario']} on module {mod_val}. Sev: {sev}, Pri: {pri}."
+                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
+                    st.code(res.choices[0].message.content)
