@@ -48,7 +48,7 @@ if 'project_db' not in st.session_state:
                 "tracker_df": pd.DataFrame(p_val.get("tracker_dict", []))
             }
 
-# 4. Sidebar & Project Management
+# 4. Sidebar
 with st.sidebar:
     st.title("🛡️ QA Hub Manager")
     existing_list = list(st.session_state.project_db.keys())
@@ -66,14 +66,14 @@ with st.sidebar:
     st.markdown("---")
     if st.button("💾 Save All Changes"):
         save_data(st.session_state.project_db)
-        st.success("Data Persistence Secured!")
+        st.success("Changes Saved!")
 
 current_data = st.session_state.project_db[active_id]
 
 # 5. UI Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ PRD & Risk Analysis", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: PRD ANALYSIS (Formatting Fix) ---
+# --- TAB 1: PRD ANALYSIS ---
 with tab1:
     col1, col2 = st.columns([1, 1.2])
     with col1:
@@ -81,17 +81,11 @@ with tab1:
         user_req = st.text_area("Paste PRD here:", value=current_data.get("requirement", ""), height=400)
         current_data["requirement"] = user_req
         
-        if st.button("🚀 Audit PRD & Generate Strategy"):
+        if st.button("🚀 Audit PRD"):
             with st.spinner("Processing..."):
-                prompt = f"Analyze PRD: {user_req}. Generate 15+ test cases in format: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. Also include a 'RISK_REPORT' in markdown."
+                prompt = f"Analyze PRD: {user_req}. Generate 15+ test cases in format: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'."
                 response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}])
                 full_res = response.choices[0].message.content
-                
-                if "RISK_REPORT" in full_res:
-                    parts = full_res.split("RISK_REPORT")
-                    current_data["risk_summary"] = parts[1]
-                
-                # Parsing Logic
                 lines = [l.replace("CASE:", "").strip() for l in full_res.split("\n") if "CASE:" in l]
                 rows = []
                 for i, l in enumerate(lines):
@@ -107,15 +101,9 @@ with tab1:
                 st.rerun()
 
     with col2:
-        st.subheader("🔥 AI Risk-Mapped Strategy")
+        st.subheader("🔥 Structured Strategy")
         if not current_data["tracker_df"].empty:
-            # FIX: Using dataframe for table view to prevent continuous text wall
             st.dataframe(current_data["tracker_df"][["ID", "Scenario", "Severity", "Priority"]], use_container_width=True, hide_index=True)
-            if current_data.get("risk_summary"):
-                with st.expander("View Risk Analysis"):
-                    st.markdown(current_data["risk_summary"])
-        else:
-            st.info("Upload PRD to see structured strategy.")
 
 # --- TAB 2: EXECUTION LOG ---
 with tab2:
@@ -129,28 +117,25 @@ with tab2:
         current_data["tracker_df"] = edited_df
         
         st.markdown("---")
-        st.subheader("🎥 Attach Evidence")
+        st.subheader("🎥 Attach Evidence Link")
         ec1, ec2 = st.columns([1, 2])
         target_tc = ec1.selectbox("Select TC:", options=edited_df["ID"])
-        link_val = ec2.text_input("Paste Screen Recording URL (Loom/Drive):")
-        if st.button("🔗 Link Evidence"):
+        link_val = ec2.text_input("Paste URL (Loom/Drive):")
+        if st.button("🔗 Save Link"):
             idx = current_data["tracker_df"].index[current_data["tracker_df"]["ID"] == target_tc][0]
             current_data["tracker_df"].at[idx, "Evidence_Link"] = link_val
-            st.success("Evidence Linked!")
-    else:
-        st.warning("Generate scenarios in Tab 1.")
+            st.success("Link Saved!")
 
-# --- TAB 3: BUG CENTER ---
+# --- TAB 3: BUG CENTER (Restored Fields & Layout Fix) ---
 with tab3:
     st.subheader("🐞 Bug Center")
     df_check = current_data.get("tracker_df", pd.DataFrame())
     fails = df_check[df_check["Status"] == "Fail"].copy()
     
     if fails.empty:
-        st.info("No failures logged.")
+        st.info("No failures logged in Execution.")
     else:
         for index, bug in fails.iterrows():
-            # Module Logic: Pre-fill only if certain
             prd_text = current_data.get("requirement", "").upper()
             found_mod = ""
             for m in ["PDP", "PLP", "CHECKOUT", "HOME", "CART"]:
@@ -159,22 +144,35 @@ with tab3:
                     break
 
             with st.expander(f"REPORT: {bug['ID']} - {bug['Scenario']}"):
-                b1, b2 = st.columns(2)
-                # FIX: If found_mod is empty, placeholder "Identify Module" shows as requested
-                mod_val = b1.text_input("Module:", value=found_mod if found_mod else bug.get("Module", ""), key=f"mod_{bug['ID']}", placeholder="Identify Module (e.g. Checkout)")
-                current_data["tracker_df"].at[index, "Module"] = mod_val
+                # Top Row: Module and Priority
+                b_col1, b_col2 = st.columns(2)
+                with b_col1:
+                    mod_val = st.text_input("Module:", value=found_mod if found_mod else bug.get("Module", ""), key=f"mod_{bug['ID']}", placeholder="Identify Module")
+                    current_data["tracker_df"].at[index, "Module"] = mod_val
+                with b_col2:
+                    final_pri = st.selectbox("Priority:", options=["P0", "P1", "P2", "P3"], index=["P0", "P1", "P2", "P3"].index(bug['Priority']) if bug['Priority'] in ["P0", "P1", "P2", "P3"] else 1, key=f"pri_{bug['ID']}")
+
+                # Second Row: Severity and Assigned To
+                s_col1, s_col2 = st.columns(2)
+                with s_col1:
+                    final_sev = st.selectbox("Severity:", options=["Blocker", "Critical", "Major", "Minor"], index=["Blocker", "Critical", "Major", "Minor"].index(bug['Severity']) if bug['Severity'] in ["Blocker", "Critical", "Major", "Minor"] else 2, key=f"sev_{bug['ID']}")
+                with s_col2:
+                    final_ass = st.text_input("Assigned To:", value=bug['Assigned_To'], key=f"ass_{bug['ID']}")
+
+                # Bug Description
+                bug_desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val if mod_val else 'Target Module'}\n2. Scenario: {bug['Scenario']}\n3. Observed Failure.", key=f"desc_{bug['ID']}")
                 
-                # FIX: Visualizing Evidence Link
-                st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence:** None attached.")
-                
-                # FIX: Added Bug Description Box
-                bug_desc = st.text_area("Bug Description / Steps:", value=f"1. Navigate to {mod_val}\n2. Perform: {bug['Scenario']}\n3. Result: Failure.", key=f"desc_{bug['ID']}")
-                
-                r1, r2 = st.columns(2)
-                exp_res = r1.text_input("Expected:", value=bug['Expected'], key=f"exp_{bug['ID']}")
-                act_res = r2.text_input("Actual:", value="Result did not match PRD criteria.", key=f"act_{bug['ID']}")
+                # REPOSITIONED: Evidence Link after Description
+                st.markdown(f"**🔗 Evidence Link:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})" if bug['Evidence_Link'] else "**🔗 Evidence Link:** None attached.")
+
+                # Bottom Row: Expected and Actual
+                r_col1, r_col2 = st.columns(2)
+                with r_col1:
+                    final_exp = st.text_input("Expected Result:", value=bug['Expected'], key=f"exp_{bug['ID']}")
+                with r_col2:
+                    final_act = st.text_input("Actual Result:", value="System did not match PRD criteria.", key=f"act_{bug['ID']}")
 
                 if st.button(f"Generate AI Jira Draft for {bug['ID']}", key=f"btn_{bug['ID']}"):
-                    prompt = f"Project: {active_id}\nModule: {mod_val}\nDescription: {bug_desc}\nExpected: {exp_res}\nActual: {act_res}\nLink: {bug['Evidence_Link']}"
-                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": f"Write a Jira bug report: {prompt}"}])
+                    prompt = f"Severity: {final_sev}\nPriority: {final_pri}\nModule: {mod_val}\nDescription: {bug_desc}\nExpected: {final_exp}\nActual: {final_act}\nEvidence: {bug['Evidence_Link']}"
+                    res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": f"Write a professional Jira ticket: {prompt}"}])
                     st.code(res.choices[0].message.content)
