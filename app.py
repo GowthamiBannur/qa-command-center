@@ -16,6 +16,7 @@ def ensure_columns(df):
             elif c == "Severity": df[c] = "Major"
             elif c == "Priority": df[c] = "P1"
             else: df[c] = ""
+    # Data Sanity: replace any empty strings/NaN in critical columns
     df["Severity"] = df["Severity"].fillna("Major").replace("", "Major")
     df["Priority"] = df["Priority"].fillna("P1").replace("", "P1")
     return df
@@ -31,7 +32,7 @@ def init_db():
 supabase = init_db()
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
 
-# 3. Sidebar (Project Management & Cloud Sync)
+# 3. Sidebar (Project Management)
 with st.sidebar:
     st.title("👥 Team QA Hub")
     res = supabase.table("qa_tracker").select("project_name").execute()
@@ -58,9 +59,9 @@ with st.sidebar:
         data = st.session_state.current_df.to_dict(orient='records')
         for r in data: r['project_name'] = st.session_state.active_id
         supabase.table("qa_tracker").insert(data).execute()
-        st.success("Synced!")
+        st.success("Synced to Cloud!")
 
-# 4. Load Data Logic
+# 4. Load Data
 if st.session_state.get('last_project') != st.session_state.active_id:
     res = supabase.table("qa_tracker").select("*").eq("project_name", st.session_state.active_id).execute()
     st.session_state.current_df = ensure_columns(pd.DataFrame(res.data))
@@ -69,31 +70,35 @@ if st.session_state.get('last_project') != st.session_state.active_id:
 # 5. Tabs
 t1, t2, t3 = st.tabs(["🏗️ Senior QA Audit", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: SENIOR AUDIT (STRATEGY ONLY) ---
+# --- TAB 1: SENIOR AUDIT (STRATEGY & QUALITY GATE) ---
 with t1:
     st.subheader("📋 Test Strategy & Release Quality Gate")
-    user_req = st.text_area("Paste PRD:", height=150)
-    if st.button("🚀 Generate Strategy"):
-        with st.spinner("Analyzing Leadership Strategy..."):
+    user_req = st.text_area("Paste PRD Document:", height=150)
+    if st.button("🚀 Run Comprehensive Audit"):
+        with st.spinner("Analyzing Leadership Strategy & Generating 30+ Test Cases..."):
             prompt = f"""Analyze PRD: {user_req}. 
             Provide:
             1. REWRITE: Simplified version for quick review.
             2. FEATURE_TABLE: Columns [Feature | Testing Focus | Edge Cases | Regression Impact].
             3. RELEASE_QUALITY_GATE: 
-               - Specific 'Must-Pass' criteria for production.
-               - Prioritization strategy when overloaded.
-               - Narrative to improve leadership perception.
-               - PM transition narrative to reduce risk.
-            4. TEST_CASES: FORMAT 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'.
-            Ensure CASE lines have NO bolding and start immediately with CASE:."""
+               - Must-Pass Criteria
+               - Prioritization strategy (Help you prioritize when overloaded)
+               - Leadership Narrative (Improve perception)
+               - PM Transition Narrative (Strengthen transition/Reduce risk)
+            4. TEST_CASES: List 35 detailed cases. 
+            FORMAT EACH CASE EXACTLY LIKE THIS: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'.
+            NO BOLDING. NO OTHER TEXT in the CASE line."""
             
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
             
-            # PARSER: Cleans the table and ignores format explanation rows
-            raw_lines = [l for l in res.split("\n") if "CASE:" in l and "FORMAT:" not in l and "[Scenario]" not in l]
+            # PARSER: Filters for CASE lines and ignores junk/headers
+            raw_lines = [l for l in res.split("\n") if "CASE:" in l and "|" in l]
             rows = []
             for i, l in enumerate(raw_lines):
+                # Triple filtering to ensure no format-instruction rows enter the log
+                if any(x in l for x in ["FORMAT:", "[Scenario]", "30+ cases"]): continue
+                
                 parts = l.replace("CASE:", "").strip().split("|")
                 if len(parts) >= 2:
                     rows.append({
@@ -109,40 +114,45 @@ with t1:
             st.rerun()
             
     if st.session_state.get('audit_report'): 
-        # Display only Strategy, hide all Test Case data from this tab
-        strategy_content = st.session_state.audit_report.split("TEST_CASES")[0]
-        st.markdown(strategy_content)
+        # Show Strategy sections only, strip out the TEST_CASES block
+        strategy_only = st.session_state.audit_report.split("TEST_CASES")[0]
+        st.markdown(strategy_only)
 
-# --- TAB 2: EXECUTION LOG ---
+# --- TAB 2: EXECUTION LOG (30+ CASES) ---
 with t2:
     st.subheader(f"Execution Log: {st.session_state.active_id}")
+    # Fixed: Direct session state assignment prevents the "double enter" bug
     st.session_state.current_df = st.data_editor(st.session_state.current_df, use_container_width=True, hide_index=True, key="ed_main",
         column_config={
             "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
             "Severity": st.column_config.SelectboxColumn("Severity", options=["Blocker", "Critical", "Major", "Minor"]),
             "Priority": st.column_config.SelectboxColumn("Priority", options=["P0", "P1", "P2", "P3"]),
-            "Evidence_Link": st.column_config.LinkColumn("Evidence URL")
+            "Evidence_Link": st.column_config.LinkColumn("Attach URL")
         })
 
-# --- TAB 3: BUG CENTER ---
+# --- TAB 3: BUG CENTER (EDITABLE & LINKED) ---
 with t3:
     st.subheader("🐞 Bug Center")
-    fails = st.session_state.current_df[st.session_state.current_df["Status"] == "Fail"]
+    df = st.session_state.current_df
+    fails = df[df["Status"] == "Fail"]
     
     if fails.empty:
-        st.info("No failed cases logged.")
+        st.info("No bugs found. Everything is passing!")
     else:
         for idx, bug in fails.iterrows():
             with st.expander(f"🐞 BUG: {bug['ID']} - {bug['Scenario']}", expanded=True):
                 c1, c2 = st.columns(2)
+                # Ensure all changes here sync back to session_state instantly
                 st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug['Module'], key=f"m_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug['Assigned_To'], key=f"a_{bug['ID']}")
                 
                 c3, c4 = st.columns(2)
-                st.session_state.current_df.at[idx, 'Severity'] = c3.selectbox("Severity:", options=["Blocker", "Critical", "Major", "Minor"], index=["Blocker", "Critical", "Major", "Minor"].index(bug['Severity']) if bug['Severity'] in ["Blocker", "Critical", "Major", "Minor"] else 2, key=f"s_{bug['ID']}")
-                st.session_state.current_df.at[idx, 'Priority'] = c4.selectbox("Priority:", options=["P0", "P1", "P2", "P3"], index=["P0", "P1", "P2", "P3"].index(bug['Priority']) if bug['Priority'] in ["P0", "P1", "P2", "P3"] else 1, key=f"p_{bug['ID']}")
+                # Dropdowns for Severity/Priority
+                st.session_state.current_df.at[idx, 'Severity'] = c3.selectbox("Update Severity:", options=["Blocker", "Critical", "Major", "Minor"], index=["Blocker", "Critical", "Major", "Minor"].index(bug['Severity']) if bug['Severity'] in ["Blocker", "Critical", "Major", "Minor"] else 2, key=f"s_{bug['ID']}")
+                st.session_state.current_df.at[idx, 'Priority'] = c4.selectbox("Update Priority:", options=["P0", "P1", "P2", "P3"], index=["P0", "P1", "P2", "P3"].index(bug['Priority']) if bug['Priority'] in ["P0", "P1", "P2", "P3"] else 1, key=f"p_{bug['ID']}")
                 
-                st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Bug Description / Actual Result:", value=bug['Actual_Result'] if bug['Actual_Result'] else f"Requirement failed: {bug['Scenario']}", key=f"d_{bug['ID']}")
+                st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Bug Description / Actual Result:", value=bug['Actual_Result'] if bug['Actual_Result'] else f"ACTUAL: Requirement failed during execution. \nEXPECTED: {bug['Expected']}", key=f"d_{bug['ID']}")
                 
-                st.markdown(f"**Expected:** {bug['Expected']}")
-                if bug['Evidence_Link']: st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})")
+                st.markdown(f"**Expected Result:** {bug['Expected']}")
+                if bug['Evidence_Link']:
+                    st.markdown(f"**🔗 Evidence:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})")
