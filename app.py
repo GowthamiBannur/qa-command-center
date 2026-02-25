@@ -8,11 +8,19 @@ from supabase import create_client, Client
 st.set_page_config(page_title="Principal QA Hub", layout="wide", page_icon="🛡️")
 
 def ensure_columns(df):
-    """Guarantees all features (Bugs, Evidence, Assignees) have a place to live."""
+    """Guarantees every field (including Severity/Priority) is filled and never empty."""
     cols = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module", "Actual_Result"]
     for c in cols:
         if c not in df.columns:
-            df[c] = "Pending" if c == "Status" else ("Major" if c == "Severity" else ("P1" if c == "Priority" else ""))
+            if c == "Status": df[c] = "Pending"
+            elif c == "Severity": df[c] = "Major" # Default if AI misses it
+            elif c == "Priority": df[c] = "P1"    # Default if AI misses it
+            elif c == "Assigned_To": df[c] = "dev@team.com"
+            else: df[c] = ""
+    
+    # Fill any existing NaN/None values to prevent empty UI cells
+    df["Severity"] = df["Severity"].fillna("Major").replace("", "Major")
+    df["Priority"] = df["Priority"].fillna("P1").replace("", "P1")
     return df
 
 # 2. Initialization & Connections
@@ -66,26 +74,45 @@ t1, t2, t3 = st.tabs(["🏗️ Senior Strategy", "✅ Execution Log", "🐞 Bug 
 
 with t1:
     st.subheader("📋 Test Strategy & Quality Gate")
+    st.markdown("""
+    * **Prioritize Overload**: Automated sorting of high-risk features.
+    * **Reduce Regression**: Visualizes impact on core e-commerce flows.
+    * **Leadership Perception**: Summary for executive stakeholders.
+    * **PM Transition**: Defines release-ready criteria.
+    """)
     user_req = st.text_area("Paste PRD:", height=150)
     if st.button("🚀 Run Strategy Audit"):
-        with st.spinner("Analyzing Strategy..."):
+        with st.spinner("Analyzing Strategy & Generating Test Cases..."):
             prompt = f"Analyze PRD: {user_req}. Provide REWRITE, FEATURE_TABLE (with Regression), QUALITY_GATE, and 30+ TEST_CASES: FORMAT 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'. No bolding."
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
+            
             cases = [l.replace("CASE:", "").strip() for l in res.split("\n") if "CASE:" in l]
             rows = []
             for i, l in enumerate(cases):
                 p = l.split("|")
                 if len(p) >= 2:
-                    rows.append({"ID": f"TC-{i+1}", "Scenario": re.sub(r'^\d+\.\s*|\*\*|_', '', p[0]).strip(), 
-                                 "Expected": re.sub(r'\*\*|_', '', p[1]).strip(), "Status": "Pending", 
-                                 "Severity": p[2].strip() if len(p)>2 else "Major", "Priority": p[3].strip() if len(p)>3 else "P1", "Assigned_To": "dev@team.com"})
+                    # Explicitly parsing Severity and Priority or defaulting to Major/P1
+                    sev = p[2].strip() if len(p) > 2 and p[2].strip() else "Major"
+                    pri = p[3].strip() if len(p) > 3 and p[3].strip() else "P1"
+                    
+                    rows.append({
+                        "ID": f"TC-{i+1}", 
+                        "Scenario": re.sub(r'^\d+\.\s*|\*\*|_', '', p[0]).strip(), 
+                        "Expected": re.sub(r'\*\*|_', '', p[1]).strip(), 
+                        "Status": "Pending", 
+                        "Severity": sev, 
+                        "Priority": pri, 
+                        "Assigned_To": "dev@team.com"
+                    })
             st.session_state.current_df = ensure_columns(pd.DataFrame(rows))
             st.rerun()
-    if st.session_state.get('audit_report'): st.markdown(st.session_state.audit_report.split("TEST_CASES")[0])
+    if st.session_state.get('audit_report'): 
+        st.markdown(st.session_state.audit_report.split("TEST_CASES")[0])
 
 with t2:
     st.subheader(f"Log: {st.session_state.active_id}")
+    # Display the table with filled Severity and Priority columns
     st.session_state.current_df = st.data_editor(st.session_state.current_df, use_container_width=True, hide_index=True, key="ed_main",
         column_config={
             "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
@@ -97,12 +124,26 @@ with t2:
 with t3:
     st.subheader("🐞 Bug Center")
     fails = st.session_state.current_df[st.session_state.current_df["Status"] == "Fail"]
-    if fails.empty: st.info("No failed cases.")
+    
+    if fails.empty:
+        st.info("No failed cases logged yet.")
     else:
         for idx, bug in fails.iterrows():
-            with st.expander(f"BUG: {bug['ID']} - {bug['Scenario']}", expanded=True):
+            with st.expander(f"🐞 BUG: {bug['ID']} - {bug['Scenario']}", expanded=True):
                 c1, c2 = st.columns(2)
-                st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug['Module'], key=f"m_{bug['ID']}")
-                st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug['Assigned_To'], key=f"e_{bug['ID']}")
-                st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Actual Result:", value=bug['Actual_Result'], key=f"ar_{bug['ID']}")
-                st.markdown(f"**Expected:** {bug['Expected']}\n\n**Evidence:** {bug['Evidence_Link']}")
+                # Module and Assigned To are pulled from Execution Log and editable here
+                st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug['Module'], key=f"mod_{bug['ID']}")
+                st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assigned To:", value=bug['Assigned_To'], key=f"assign_{bug['ID']}")
+                
+                c3, c4 = st.columns(2)
+                # Severity and Priority Dropdowns are now filled
+                st.session_state.current_df.at[idx, 'Severity'] = c3.selectbox("Severity:", options=["Blocker", "Critical", "Major", "Minor"], index=["Blocker", "Critical", "Major", "Minor"].index(bug['Severity']) if bug['Severity'] in ["Blocker", "Critical", "Major", "Minor"] else 2, key=f"sev_{bug['ID']}")
+                st.session_state.current_df.at[idx, 'Priority'] = c4.selectbox("Priority:", options=["P0", "P1", "P2", "P3"], index=["P0", "P1", "P2", "P3"].index(bug['Priority']) if bug['Priority'] in ["P0", "P1", "P2", "P3"] else 1, key=f"pri_{bug['ID']}")
+                
+                st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Bug Description / Actual Result:", value=bug['Actual_Result'] if bug['Actual_Result'] else f"Requirement failed for: {bug['Scenario']}", key=f"desc_{bug['ID']}")
+                
+                st.markdown(f"**Expected Result:** {bug['Expected']}")
+                if bug['Evidence_Link']:
+                    st.markdown(f"**🔗 Evidence Link:** [{bug['Evidence_Link']}]({bug['Evidence_Link']})")
+                else:
+                    st.warning("⚠️ No evidence attached.")
