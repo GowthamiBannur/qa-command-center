@@ -8,33 +8,47 @@ from supabase import create_client, Client
 # 1. Page Config
 st.set_page_config(page_title="Team QA Strategy Hub", layout="wide", page_icon="🛡️")
 
-# 2. Connections
+# 2. INITIALIZE SESSION STATE (The Fix)
+# We define these at the very start so the app knows they exist from second one.
+if 'current_df' not in st.session_state:
+    st.session_state.current_df = pd.DataFrame(columns=["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module"])
+if 'audit_report' not in st.session_state:
+    st.session_state.audit_report = None
+
+# 3. Connections
 @st.cache_resource
 def init_connection():
-    url = st.secrets["SUPABASE_URL"]
-    key = st.secrets["SUPABASE_KEY"]
-    return create_client(url, key)
+    try:
+        url = st.secrets["SUPABASE_URL"]
+        key = st.secrets["SUPABASE_KEY"]
+        return create_client(url, key)
+    except Exception as e:
+        st.error("Missing Supabase Secrets!")
+        return None
 
 supabase = init_connection()
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
 
-# 3. Persistence Logic
+# 4. Database Functions
 def load_projects():
+    if not supabase: return ["Default_Project"]
     res = supabase.table("qa_tracker").select("project_name").execute()
     return sorted(list(set([r['project_name'] for r in res.data]))) if res.data else ["Default_Project"]
 
 def load_project_data(project_name):
+    if not supabase: return pd.DataFrame()
     res = supabase.table("qa_tracker").select("*").eq("project_name", project_name).execute()
     return pd.DataFrame(res.data)
 
 def sync_to_db(df, project_name):
+    if not supabase: return
     supabase.table("qa_tracker").delete().eq("project_name", project_name).execute()
     if not df.empty:
         data_to_save = df.to_dict(orient='records')
         for row in data_to_save: row['project_name'] = project_name
         supabase.table("qa_tracker").insert(data_to_save).execute()
 
-# 4. Sidebar
+# 5. Sidebar
 with st.sidebar:
     st.title("👥 Team QA Hub")
     project_list = load_projects()
@@ -50,40 +64,27 @@ with st.sidebar:
         sync_to_db(st.session_state.current_df, active_id)
         st.success("Cloud Database Updated!")
 
-# 5. Load Data
-if 'current_df' not in st.session_state or st.session_state.get('last_project') != active_id:
+# 6. Load Project Logic
+if st.session_state.get('last_project') != active_id:
     df = load_project_data(active_id)
-    if df.empty:
-        df = pd.DataFrame(columns=["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module"])
-    st.session_state.current_df = df
+    if not df.empty:
+        st.session_state.current_df = df
     st.session_state.last_project = active_id
-    # Storage for Audit Report
-    if 'audit_report' not in st.session_state: st.session_state.audit_report = None
 
-# 6. Tabs
+# 7. Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit & Strategy", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: DEEP AUDIT & REGRESSION STRATEGY ---
 with tab1:
     st.subheader("📋 Requirement Intelligence & Impact Analysis")
-    user_req = st.text_area("Paste PRD / Requirement Document here:", height=300, placeholder="Paste messy or complex requirements here...")
+    user_req = st.text_area("Paste PRD / Requirement Document here:", height=300)
     
     if st.button("🚀 Run Deep Strategy Audit"):
-        with st.spinner("Analyzing E-commerce dependencies and edge cases..."):
-            prompt = f"""
-            You are a Senior Lead QA & Business Analyst. Analyze this E-commerce PRD: {user_req}
-            
-            Provide the following in Markdown format:
-            1. REWRITE: A simplified, clear summary of what this feature actually does.
-            2. FEATURE_TABLE: A table with columns: [Feature Component | What to Test | Edge Cases | Regression Impact (Where else it affects in E-comm)]
-            3. DOUBTS: List specific technical or functional questions to ask the developers/PO.
-            4. RISK_MITIGATION: A table with [Risk Identified | Mitigation Strategy].
-            5. TEST_CASES: Generate at least 30 test cases in format 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'
-            """
+        with st.spinner("Analyzing E-commerce dependencies..."):
+            prompt = f"Senior QA Lead: Analyze this E-comm PRD: {user_req}. Provide REWRITE, FEATURE_TABLE (with Regression Impact), DOUBTS, RISK_MITIGATION, and 30+ TEST_CASES."
             response = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = response
             
-            # Extract Test Cases for Tab 2
+            # Parsing logic
             lines = [l.replace("CASE:", "").strip() for l in response.split("\n") if "CASE:" in l]
             rows = []
             for i, l in enumerate(lines):
@@ -93,26 +94,21 @@ with tab1:
             st.session_state.current_df = pd.DataFrame(rows)
             st.rerun()
 
-    if st.session_state.audit_report:
+    # The Crash-Proof Check
+    if st.session_state.get('audit_report'):
         st.markdown("---")
-        # Display the AI analysis report
         st.markdown(st.session_state.audit_report)
 
-# --- TAB 2: EXECUTION LOG ---
 with tab2:
-    st.subheader(f"Execution Log: {active_id}")
-    edited_df = st.data_editor(st.session_state.current_df, use_container_width=True, hide_index=True, key="main_editor",
-                               column_config={"Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"])})
-    st.session_state.current_df = edited_df
+    st.subheader(f"Project: {active_id}")
+    st.session_state.current_df = st.data_editor(st.session_state.current_df, use_container_width=True, hide_index=True)
 
-# --- TAB 3: BUG CENTER ---
 with tab3:
-    st.subheader("🐞 Bug Reports")
+    st.subheader("🐞 Team Bug Reports")
     fails = st.session_state.current_df[st.session_state.current_df["Status"] == "Fail"]
-    if fails.empty: st.info("No bugs found. High-five!")
+    if fails.empty: st.info("No bugs found.")
     else:
         for idx, bug in fails.iterrows():
             with st.expander(f"BUG: {bug['ID']} - {bug['Scenario']}"):
-                st.write(f"**Impacted Module:** {bug['Module']}")
                 st.write(f"**Expected:** {bug['Expected']}")
-                st.info(f"Link: {bug['Evidence_Link']}")
+                st.write(f"**Side Effects:** {bug['Module']}")
