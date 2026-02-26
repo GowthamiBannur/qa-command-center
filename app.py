@@ -109,7 +109,6 @@ with tab1:
             
             rows = []
             for i, l in enumerate(lines):
-                # Hard filter against instruction lines
                 if any(x in l for x in ["FORMAT:", "[Scenario]", "35+", "Note:"]): continue
                 p = l.split("|")
                 if len(p) >= 2:
@@ -123,16 +122,21 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # NUCLEAR FILTER for Tab 1
-        # 1. Split at the hard tag
-        strategy_only = st.session_state.audit_report.split("[STOP_STRATEGY]")[0]
-        # 2. Cut off at Point 5 regardless of naming
-        strategy_only = re.split(r'\n\s*5[\.\)]', strategy_only, flags=re.IGNORECASE)[0]
-        # 3. Clean up any trailing text like "Here are test cases:" or "Note:"
-        strategy_only = re.split(r'Here are.*?test cases|Note:.*?severity', strategy_only, flags=re.IGNORECASE | re.DOTALL)[0]
-        # 4. Final filter for any remaining CASE: lines
-        strategy_only = "\n".join([line for line in strategy_only.split("\n") if "CASE:" not in line])
-        st.markdown(strategy_only)
+        # ABSOLUTE CUTOFF LOGIC
+        report = st.session_state.audit_report
+        
+        # Define stop markers
+        stop_markers = ["[STOP_STRATEGY]", "5. TEST_CASES", "5 TEST_CASES", "5. TEST CASES", "Here are 35+", "CASE:"]
+        
+        cutoff_index = len(report)
+        for marker in stop_markers:
+            idx = report.find(marker)
+            if idx != -1 and idx < cutoff_index:
+                cutoff_index = idx
+        
+        # Display only up to the first marker found
+        final_strategy = report[:cutoff_index].strip()
+        st.markdown(final_strategy)
 
 # --- TAB 2: EXECUTION LOG ---
 with tab2:
@@ -142,7 +146,8 @@ with tab2:
         column_config={
             "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
             "Severity": st.column_config.SelectboxColumn("Severity", options=["Blocker", "Critical", "Major", "Minor"]),
-            "Priority": st.column_config.SelectboxColumn("Priority", options=["P0", "P1", "P2", "P3"])
+            "Priority": st.column_config.SelectboxColumn("Priority", options=["P0", "P1", "P2", "P3"]),
+            "Evidence_Link": st.column_config.LinkColumn("Attach URL")
         }
     )
 
