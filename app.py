@@ -18,7 +18,6 @@ def ensure_standard_columns(df):
             elif col in ["Severity", "Priority"]: df[col] = "Major" if col == "Severity" else "P1"
             else: df[col] = ""
     
-    # Force defaults for empty rows to ensure Log visibility
     df["Severity"] = df["Severity"].fillna("Major").replace("", "Major")
     df["Priority"] = df["Priority"].fillna("P1").replace("", "P1")
     df["Actual_Result"] = df["Actual_Result"].fillna("")
@@ -32,7 +31,7 @@ def clean_text(text):
 if 'current_df' not in st.session_state:
     st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
 if 'audit_report' not in st.session_state:
-    st.session_state.audit_report = None
+    st.session_state.audit_report = ""
 
 # 4. Connections
 @st.cache_resource
@@ -64,24 +63,39 @@ with st.sidebar:
         if st.button("Create"):
             st.session_state.active_id = new_name
             st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
+            st.session_state.audit_report = ""
             st.rerun()
     else:
         st.session_state.active_id = current_proj
 
-    if st.button("🌊 Sync Changes for Team", use_container_width=True):
+    # --- UPDATED SYNC LOGIC: Saves Tab 1 Text Too ---
+    if st.button("🌊 Sync Full Project (All Tabs)", use_container_width=True):
+        # 1. Clear old data for this project
         supabase.table("qa_tracker").delete().eq("project_name", st.session_state.active_id).execute()
+        
+        # 2. Prepare data with the audit_report included in every row (simplest way to sync text state)
         data = st.session_state.current_df.to_dict(orient='records')
-        for row in data: row['project_name'] = st.session_state.active_id
+        for row in data: 
+            row['project_name'] = st.session_state.active_id
+            row['strategy_text'] = st.session_state.audit_report # Save Tab 1 content
+            
         supabase.table("qa_tracker").insert(data).execute()
-        st.success("Synced!")
+        st.success(f"Saved Strategy + {len(data)} Cases!")
 
-# Data Loading
+# 6. Data Loading (Restores Tab 1 + Tab 2 + Tab 3)
 if st.session_state.get('last_project') != st.session_state.active_id:
     res = supabase.table("qa_tracker").select("*").eq("project_name", st.session_state.active_id).execute()
-    st.session_state.current_df = ensure_standard_columns(pd.DataFrame(res.data))
+    if res.data:
+        df_loaded = pd.DataFrame(res.data)
+        st.session_state.current_df = ensure_standard_columns(df_loaded)
+        # Restore the Strategy text from the first available row
+        st.session_state.audit_report = res.data[0].get('strategy_text', "")
+    else:
+        st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
+        st.session_state.audit_report = ""
     st.session_state.last_project = st.session_state.active_id
 
-# 6. Tabs
+# 7. Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit & Strategy", "✅ Execution Log", "🐞 Bug Center"])
 
 # --- TAB 1: SENIOR STRATEGY ---
@@ -95,7 +109,7 @@ with tab1:
             1. REWRITE: Summary.
             2. FEATURE_TABLE: [Feature | Testing Focus | Edge Cases | Regression Impact].
             3. STRATEGY: Must-Pass criteria & PM Narrative.
-            4. DOUBTS: Queries.
+            4. DOUBTS: Queries for PO.
             
             [SEPARATOR]
             
@@ -105,22 +119,18 @@ with tab1:
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
             
-            # PARSER: Extract cases from AFTER the separator
             parts = res.split("[SEPARATOR]")
             case_text = parts[1] if len(parts) > 1 else res
             
             lines = [l.replace("CASE:", "").strip() for l in case_text.split("\n") if "CASE:" in l]
             rows = []
             for i, l in enumerate(lines):
-                # Extra check to skip any header rows that look like format instructions
                 if "[Scenario]" in l or "FORMAT:" in l: continue
                 p = l.split("|")
                 if len(p) >= 2:
                     rows.append({
                         "ID": f"TC-{i+1}", 
-                        "Scenario": clean_text(p[0]), 
-                        "Expected": clean_text(p[1]), 
-                        "Status": "Pending", 
+                        "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]), "Status": "Pending", 
                         "Severity": clean_text(p[2]) if len(p)>2 and p[2].strip() else "Major", 
                         "Priority": clean_text(p[3]) if len(p)>3 and p[3].strip() else "P1",
                         "Assigned_To": "dev@team.com", "Module": "", "Actual_Result": ""
@@ -128,23 +138,18 @@ with tab1:
             st.session_state.current_df = ensure_standard_columns(pd.DataFrame(rows))
             st.rerun()
 
-    if st.session_state.get('audit_report'):
-        # DYNAMIC FILTER: Remove anything after point 4 and any stray CASE: lines
-        full_text = st.session_state.audit_report.split("[SEPARATOR]")[0]
-        # Regex to remove Point 5 header if it leaked above the separator
-        clean_strategy = re.split(r'\n5\.?\s*TEST_CASES', full_text, flags=re.IGNORECASE)[0]
-        # Final safety check: remove any individual CASE: lines that might have appeared
-        clean_strategy = "\n".join([line for line in clean_strategy.split("\n") if "CASE:" not in line])
-        st.markdown(clean_strategy)
+    if st.session_state.audit_report:
+        # DISPLAY LOGIC: Split at separator and filter out point 5 + CASE lines
+        strategy_part = st.session_state.audit_report.split("[SEPARATOR]")[0]
+        strategy_part = re.split(r'\n5\.?\s*TEST_CASES', strategy_part, flags=re.IGNORECASE)[0]
+        strategy_part = "\n".join([line for line in strategy_part.split("\n") if "CASE:" not in line])
+        st.markdown(strategy_part)
 
 # --- TAB 2: EXECUTION LOG ---
 with tab2:
     st.subheader(f"Execution Log: {st.session_state.active_id}")
     st.session_state.current_df = st.data_editor(
-        st.session_state.current_df,
-        use_container_width=True,
-        hide_index=True,
-        key="main_editor",
+        st.session_state.current_df, use_container_width=True, hide_index=True, key="main_editor",
         column_config={
             "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
             "Severity": st.column_config.SelectboxColumn("Severity", options=["Blocker", "Critical", "Major", "Minor"]),
