@@ -111,7 +111,8 @@ with tab1:
                - Prioritization for overloaded sprints.
                - Narrative for PM transition.
             4. DOUBTS: Queries for Dev/PO.
-           
+            5. TEST_CASES: 30+ cases. FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'
+            (Avoid all ** or __ markers in CASE lines).
             """
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
