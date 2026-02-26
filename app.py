@@ -7,7 +7,7 @@ from supabase import create_client, Client
 # 1. Page Config
 st.set_page_config(page_title="Principal QA Strategy Hub", layout="wide", page_icon="🛡️")
 
-# 2. Schema & Safety Logic
+# 2. Safety Logic
 def ensure_standard_columns(df):
     required = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module", "Actual_Result"]
     for col in required:
@@ -64,24 +64,32 @@ with tab1:
     st.subheader("📋 Senior Strategy & Doubts")
     user_req = st.text_area("Paste PRD Document:", height=150)
     
-    if st.button("🚀 Generate Audit"):
-        with st.spinner("Analyzing Strategy & Doubts..."):
-            # Prompt forces Doubts to be inside the visible section
+    if st.button("🚀 Generate Full Audit"):
+        with st.spinner("Analyzing Full PRD..."):
+            # REWRITTEN PROMPT: Forcing explicit section headers to prevent skipping
             prompt = f"""Analyze PRD: {user_req}
-            1. REWRITE: Summary
-            2. FEATURE_TABLE: [Feature|Focus|Edge|Impact]
-            3. STRATEGY: Must-Pass criteria
-            4. DOUBTS: List queries for PM
             
-            ###MARKER_VISIBLE_END###
+            Strictly provide the following sections in order:
             
-            5. TEST_CASES: 35+ cases. FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
+            1. REWRITE: Summary (Detailed)
+            2. FEATURE_TABLE: [Feature | Focus | Edge Cases | Regression Impact]
+            3. STRATEGY: List Must-Pass criteria and Quality Gates.
+            4. DOUBTS: List specific technical/business queries for the PM.
+            
+            ---STRATEGY_COMPLETE---
+            
+            5. TEST_CASES: Provide 35+ granular cases.
+            FORMAT EACH CASE LINE AS: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
             
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
             
-            # Parsing cases for Tab 2
-            case_section = res.split("###MARKER_VISIBLE_END###")[1] if "###MARKER_VISIBLE_END###" in res else res
+            # Parsing for Tab 2
+            if "---STRATEGY_COMPLETE---" in res:
+                case_section = res.split("---STRATEGY_COMPLETE---")[1]
+            else:
+                case_section = res
+                
             lines = [l.replace("CASE:", "").strip() for l in case_section.split("\n") if "CASE:" in l and "|" in l]
             
             rows = []
@@ -97,14 +105,14 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # Display everything BEFORE the marker, which now includes Doubts
-        visible_content = st.session_state.audit_report.split("###MARKER_VISIBLE_END###")[0].strip()
+        # Display everything before the marker (Summary, Table, Strategy, Doubts)
+        visible_audit = st.session_state.audit_report.split("---STRATEGY_COMPLETE---")[0].strip()
         
-        # Scrub any accidental trailing Test Case headers or bold markers
-        visible_content = re.split(r'\n\s*5[\.\)]|\*\*5\.|\*\*Test Cases', visible_content, flags=re.IGNORECASE)[0].strip()
-        visible_content = re.sub(r'[\s\*_#\(\[\-\)\:\.]+?$', '', visible_content)
+        # Clean up markers and any trailing junk
+        visible_audit = visible_audit.replace("SECTION_STRATEGY:", "").replace("PART A:", "")
+        visible_audit = re.sub(r'[\s\*_#\(\[\-\)\:\.]+?$', '', visible_audit)
         
-        st.markdown(visible_content)
+        st.markdown(visible_audit)
 
 # --- TAB 2: EXECUTION ---
 with tab2:
