@@ -16,7 +16,6 @@ def ensure_standard_columns(df):
             elif col == "Assigned_To": df[col] = "dev@team.com"
             elif col in ["Severity", "Priority"]: df[col] = "Major" if col == "Severity" else "P1"
             else: df[col] = ""
-    # Ensure no empty values for key execution fields
     df["Severity"] = df["Severity"].fillna("Major").replace("", "Major")
     df["Priority"] = df["Priority"].fillna("P1").replace("", "P1")
     return df
@@ -25,10 +24,11 @@ def clean_text(text):
     if not isinstance(text, str): return text
     return re.sub(r'\*\*|__', '', text).strip()
 
-# 3. State & Connections
+# 3. Initialization
 if 'current_df' not in st.session_state: st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
 if 'audit_report' not in st.session_state: st.session_state.audit_report = ""
 
+# 4. Connections
 @st.cache_resource
 def init_connection():
     try: return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -37,7 +37,7 @@ def init_connection():
 supabase = init_connection()
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
 
-# 4. Sidebar Management
+# 5. Sidebar & Full Sync
 with st.sidebar:
     st.title("👥 Team QA Hub")
     try:
@@ -54,32 +54,23 @@ with st.sidebar:
             row['project_name'] = st.session_state.active_id
             row['strategy_text'] = st.session_state.audit_report
         supabase.table("qa_tracker").insert(data).execute()
-        st.success("State Synced!")
+        st.success("Project Saved!")
 
-# 5. Tabs
-tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit & Strategy", "✅ Execution Log", "🐞 Bug Center"])
+# 6. Tabs
+tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: STRATEGY ---
+# --- TAB 1: SENIOR STRATEGY ---
 with tab1:
     st.subheader("📋 Senior Strategy & Doubts")
     user_req = st.text_area("Paste PRD Document:", height=150)
     
     if st.button("🚀 Generate Audit"):
         with st.spinner("Analyzing..."):
-            prompt = f"""Analyze PRD: {user_req}
-            SECTION_STRATEGY:
-            1. REWRITE: Summary.
-            2. FEATURE_TABLE: [Feature|Focus|Edge|Impact].
-            3. STRATEGY: Must-Pass criteria.
-            4. DOUBTS: Queries for PM.
-            SECTION_SEPARATOR
-            SECTION_CASES:
-            5. TEST_CASES: List 35+ cases. FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
-            
+            prompt = f"PRD: {user_req}\n1. REWRITE: Summary\n2. FEATURE_TABLE\n3. STRATEGY\n4. DOUBTS\n###X###\n5. TEST_CASES: 35+ cases. FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
             
-            case_section = res.split("SECTION_SEPARATOR")[1] if "SECTION_SEPARATOR" in res else res
+            case_section = res.split("###X###")[1] if "###X###" in res else res
             lines = [l.replace("CASE:", "").strip() for l in case_section.split("\n") if "CASE:" in l and "|" in l]
             
             rows = []
@@ -95,25 +86,22 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # Split at separator
-        strategy_display = st.session_state.audit_report.split("SECTION_SEPARATOR")[0].strip()
+        # 1. HARD SPLIT at the token
+        clean_strategy = st.session_state.audit_report.split("###X###")[0].strip()
         
-        # Backup cutoff for leaked headers
-        strategy_display = re.split(r'SECTION_CASES|5\.?\s*TEST', strategy_display, flags=re.IGNORECASE)[0]
+        # 2. DELETE any mentioning of Test Cases or Headers at the end
+        clean_strategy = re.split(r'\n\s*5[\.\)]|\*\*5\.|\*\*Test Cases', clean_strategy, flags=re.IGNORECASE)[0].strip()
         
-        # REMOVE LABELS
-        strategy_display = strategy_display.replace("SECTION_STRATEGY:", "").strip()
+        # 3. RECURSIVE SCRUB: Deletes trailing symbols (*, _, #, spaces, brackets)
+        clean_strategy = re.sub(r'[\s\*_#\(\[\-\)\:\.]+?$', '', clean_strategy)
         
-        # THE FIX: Aggressive trailing character scrub (removes **, __, #, and spaces at end)
-        strategy_display = re.sub(r'[\s\*_#\-]*$', '', strategy_display)
-        
-        st.markdown(strategy_display)
+        st.markdown(clean_strategy)
 
 # --- TAB 2: EXECUTION ---
 with tab2:
-    st.subheader(f"Execution Log: {st.session_state.active_id}")
+    st.subheader(f"Log: {st.session_state.active_id}")
     st.session_state.current_df = st.data_editor(
-        st.session_state.current_df, use_container_width=True, hide_index=True, key="main_editor",
+        st.session_state.current_df, use_container_width=True, hide_index=True,
         column_config={
             "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
             "Severity": st.column_config.SelectboxColumn("Severity", options=["Blocker", "Critical", "Major", "Minor"]),
@@ -133,7 +121,8 @@ with tab3:
                 st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug.get('Module',''), key=f"mod_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug.get('Assigned_To','dev@team.com'), key=f"asgn_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Details:", value=bug.get('Actual_Result',''), key=f"desc_{bug['ID']}")
-                # RESTORED BUG INFO: Explicitly showing Priority and Severity
-                st.markdown(f"**Expected:** {bug['Expected']}\n\n**Priority:** {bug['Priority']} | **Severity:** {bug['Severity']}")
+                # Display Severity and Priority properly
+                st.info(f"Priority: {bug['Priority']} | Severity: {bug['Severity']}")
+                st.markdown(f"**Expected:** {bug['Expected']}")
     else:
-        st.info("No bugs found.")
+        st.info("No active bugs.")
