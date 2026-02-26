@@ -19,6 +19,9 @@ def ensure_standard_columns(df):
     for col in required:
         if col not in df.columns:
             df[col] = "Pending" if col == "Status" else ""
+    # Ensure no empty values in Severity/Priority
+    df["Severity"] = df["Severity"].replace("", "Major").fillna("Major")
+    df["Priority"] = df["Priority"].replace("", "P1").fillna("P1")
     return df
 
 # 3. Initialization
@@ -111,8 +114,10 @@ with tab1:
                - Prioritization for overloaded sprints.
                - Narrative for PM transition.
             4. DOUBTS: Queries for Dev/PO.
-            5. TEST_CASES: 30+ cases. FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'
-            (Avoid all ** or __ markers in CASE lines).
+            
+            5. TEST_CASES: Provide 30+ detailed cases. 
+            FORMAT EACH CASE LINE AS: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'
+            (Severity must be Blocker, Critical, Major, or Minor. Priority must be P0, P1, P2, or P3).
             """
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
@@ -128,23 +133,23 @@ with tab1:
                         "Scenario": clean_text(p[0]), 
                         "Expected": clean_text(p[1]), 
                         "Status": "Pending", 
-                        "Severity": clean_text(p[2]) if len(p)>2 else "Major", 
-                        "Priority": clean_text(p[3]) if len(p)>3 else "P1",
-                        "Assigned_To": "dev@team.com"
+                        "Severity": clean_text(p[2]) if len(p)>2 and p[2].strip() else "Major", 
+                        "Priority": clean_text(p[3]) if len(p)>3 and p[3].strip() else "P1",
+                        "Assigned_To": "dev@team.com",
+                        "Module": ""
                     })
             st.session_state.current_df = ensure_standard_columns(pd.DataFrame(rows))
             st.rerun()
 
     if st.session_state.get('audit_report'):
-        # Only show the Strategy portion
-        strategy_view = st.session_state.audit_report.split("TEST_CASES")[0]
+        # Only show the Strategy portion (Ends at Point 4)
+        strategy_view = st.session_state.audit_report.split("5. TEST_CASES")[0]
         st.markdown(strategy_view)
 
 # --- TAB 2: EXECUTION LOG (FIXED SYNC) ---
 with tab2:
     st.subheader(f"Execution Log: {st.session_state.active_id}")
     
-    # Using key and data_editor properly to ensure state updates on first edit
     edited_df = st.data_editor(
         st.session_state.current_df,
         use_container_width=True,
@@ -157,7 +162,6 @@ with tab2:
             "Evidence_Link": st.column_config.LinkColumn("Evidence URL")
         }
     )
-    # Immediate state update
     st.session_state.current_df = edited_df
 
 # --- TAB 3: BUG CENTER ---
@@ -173,7 +177,6 @@ with tab3:
             with st.expander(f"BUG: {bug['ID']} - {bug['Scenario']}"):
                 c1, c2 = st.columns(2)
                 
-                # These update st.session_state.current_df directly via indexing
                 mod = c1.text_input("Module:", value=bug['Module'], key=f"mod_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Module'] = mod
                 
