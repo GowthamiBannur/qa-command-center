@@ -59,33 +59,31 @@ with st.sidebar:
 # 6. Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit & Strategy", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: STRATEGY (The Fix) ---
+# --- TAB 1: STRATEGY ---
 with tab1:
     st.subheader("📋 Senior Strategy & Doubts")
     user_req = st.text_area("Paste PRD Document:", height=150)
     
     if st.button("🚀 Generate Audit"):
         with st.spinner("Analyzing Strategy & Capturing Doubts..."):
-            # REWRITTEN PROMPT: Explicitly demanding the Doubts section before the separator
             prompt = f"""Analyze PRD: {user_req}
             
-            PART A - STRATEGY (MANDATORY):
+            SECTION_STRATEGY:
             1. REWRITE: Summary.
             2. FEATURE_TABLE: [Feature|Testing Focus|Edge Cases|Regression Impact].
             3. STRATEGY: Must-Pass criteria.
             4. DOUBTS: List specific queries for the Product Manager.
             
-            END_OF_STRATEGY_SECTION
+            SECTION_SEPARATOR
             
-            PART B - EXECUTION:
+            SECTION_CASES:
             5. TEST_CASES: List 35+ cases. 
             FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
             
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
             
-            # PARSER for Tab 2
-            case_section = res.split("END_OF_STRATEGY_SECTION")[1] if "END_OF_STRATEGY_SECTION" in res else res
+            case_section = res.split("SECTION_SEPARATOR")[1] if "SECTION_SEPARATOR" in res else res
             lines = [l.replace("CASE:", "").strip() for l in case_section.split("\n") if "CASE:" in l and "|" in l]
             
             rows = []
@@ -101,12 +99,18 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # DISPLAY LOGIC: Capture everything before the tag, including section 4 (Doubts)
-        strategy_display = st.session_state.audit_report.split("END_OF_STRATEGY_SECTION")[0].strip()
+        # Display logic that cuts off at the separator
+        strategy_display = st.session_state.audit_report.split("SECTION_SEPARATOR")[0].strip()
         
-        # FINAL SCRUB: Remove any stray Part B headers if the AI leaked them early
-        strategy_display = re.split(r'PART B|5\.?\s*TEST', strategy_display, flags=re.IGNORECASE)[0]
-        st.markdown(strategy_display)
+        # REMOVE THE HEADLINES: Strip out the internal markers used for prompting
+        strategy_display = strategy_display.replace("SECTION_STRATEGY:", "")
+        strategy_display = strategy_display.replace("PART A - STRATEGY:", "")
+        strategy_display = strategy_display.replace("**PART A - STRATEGY**", "")
+        
+        # Aggressive cutoff for any accidental "Test Case" or "Part B" leaks
+        strategy_display = re.split(r'PART B|SECTION_CASES|5\.?\s*TEST', strategy_display, flags=re.IGNORECASE)[0]
+        
+        st.markdown(strategy_display.strip())
 
 # --- TAB 2: EXECUTION ---
 with tab2:
@@ -125,9 +129,7 @@ with tab3:
     st.subheader("🐞 Bug Center")
     st.session_state.current_df = ensure_standard_columns(st.session_state.current_df)
     fails = st.session_state.current_df[st.session_state.current_df["Status"] == "Fail"]
-    if fails.empty:
-        st.info("No bugs found.")
-    else:
+    if not fails.empty:
         for idx, bug in fails.iterrows():
             with st.expander(f"🐞 BUG: {bug['ID']} - {bug['Scenario']}", expanded=True):
                 c1, c2 = st.columns(2)
@@ -135,3 +137,5 @@ with tab3:
                 st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug.get('Assigned_To','dev@team.com'), key=f"asgn_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Details:", value=bug.get('Actual_Result',''), key=f"desc_{bug['ID']}")
                 st.markdown(f"**Expected:** {bug['Expected']}\n**Priority:** {bug['Priority']} | **Severity:** {bug['Severity']}")
+    else:
+        st.info("No bugs found.")
