@@ -23,7 +23,6 @@ def ensure_standard_columns(df):
 
 def clean_text(text):
     if not isinstance(text, str): return text
-    # Enhanced cleaning to strip bold markers and excess whitespace
     return re.sub(r'\*\*|__', '', text).strip()
 
 # 3. Initialization
@@ -104,7 +103,6 @@ with tab1:
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
             
-            # PARSER: Extract ONLY valid CASE lines
             case_text = res.split("[STOP_STRATEGY]")[1] if "[STOP_STRATEGY]" in res else res
             lines = [l.replace("CASE:", "").strip() for l in case_text.split("\n") if "CASE:" in l and "|" in l]
             
@@ -123,19 +121,20 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # ABSOLUTE CUTOFF LOGIC + ASTERISK STRIP
+        # ULTIMATE PRECISION CUTOFF
         report = st.session_state.audit_report
-        stop_markers = ["[STOP_STRATEGY]", "5. TEST_CASES", "5 TEST_CASES", "5. TEST CASES", "Here are 35+", "CASE:"]
         
-        cutoff_index = len(report)
-        for marker in stop_markers:
-            idx = report.find(marker)
-            if idx != -1 and idx < cutoff_index:
-                cutoff_index = idx
+        # Pattern to find any mention of "5. Test Cases" or similar variations, with or without markdown
+        pattern = r"(\[STOP_STRATEGY\]|\n\s*\*?\*?5[\.\)]\s*Test\s*Cases|\n\s*\*?\*?5\s*Test\s*Cases|Here\s*are.*?test\s*cases|CASE:)"
+        match = re.search(pattern, report, flags=re.IGNORECASE | re.DOTALL)
         
-        # Truncate and then strip dangling bold markers from the very end
-        final_strategy = report[:cutoff_index].strip()
-        final_strategy = re.sub(r'(\s*\**\s*)$', '', final_strategy) # Remove trailing asterisks
+        if match:
+            final_strategy = report[:match.start()].strip()
+        else:
+            final_strategy = report.strip()
+            
+        # Scrub any dangling markdown and excess lines at the very end
+        final_strategy = re.sub(r'[\s\*]*$', '', final_strategy)
         st.markdown(final_strategy)
 
 # --- TAB 2: EXECUTION LOG ---
@@ -146,8 +145,7 @@ with tab2:
         column_config={
             "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
             "Severity": st.column_config.SelectboxColumn("Severity", options=["Blocker", "Critical", "Major", "Minor"]),
-            "Priority": st.column_config.SelectboxColumn("Priority", options=["P0", "P1", "P2", "P3"]),
-            "Evidence_Link": st.column_config.LinkColumn("Attach URL")
+            "Priority": st.column_config.SelectboxColumn("Priority", options=["P0", "P1", "P2", "P3"])
         }
     )
 
