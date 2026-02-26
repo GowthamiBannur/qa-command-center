@@ -7,25 +7,30 @@ from supabase import create_client, Client
 # 1. Page Config
 st.set_page_config(page_title="Principal QA Strategy Hub", layout="wide", page_icon="🛡️")
 
-# 2. Cleanup & Schema Logic
-def clean_text(text):
-    if not isinstance(text, str): return text
-    return re.sub(r'\*\*|__', '', text).strip()
-
+# 2. Cleanup & Schema Logic - CRASH PROTECTION ADDED HERE
 def ensure_standard_columns(df):
+    """Guarantees every field exists to prevent KeyError."""
     required = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module", "Actual_Result"]
     for col in required:
         if col not in df.columns:
             if col == "Status": df[col] = "Pending"
             elif col == "Assigned_To": df[col] = "dev@team.com"
+            elif col in ["Severity", "Priority"]: df[col] = "Major" if col == "Severity" else "P1"
             else: df[col] = ""
-    df["Severity"] = df["Severity"].replace("", "Major").fillna("Major")
-    df["Priority"] = df["Priority"].replace("", "P1").fillna("P1")
+    
+    # Fill any internal NaNs that might cause display issues
+    df["Severity"] = df["Severity"].fillna("Major").replace("", "Major")
+    df["Priority"] = df["Priority"].fillna("P1").replace("", "P1")
+    df["Actual_Result"] = df["Actual_Result"].fillna("")
     return df
+
+def clean_text(text):
+    if not isinstance(text, str): return text
+    return re.sub(r'\*\*|__', '', text).strip()
 
 # 3. Initialization
 if 'current_df' not in st.session_state:
-    st.session_state.current_df = pd.DataFrame(columns=["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module", "Actual_Result"])
+    st.session_state.current_df = ensure_standard_columns(pd.DataFrame(columns=["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module", "Actual_Result"]))
 if 'audit_report' not in st.session_state:
     st.session_state.audit_report = None
 
@@ -41,7 +46,7 @@ def init_connection():
 supabase = init_connection()
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
 
-# 5. Database Functions
+# 5. Load Data Logic
 def load_projects():
     if not supabase: return ["Project_Alpha"]
     res = supabase.table("qa_tracker").select("project_name").execute()
@@ -73,18 +78,18 @@ with st.sidebar:
             supabase.table("qa_tracker").insert(data).execute()
             st.success("Synced!")
 
-# 7. Load Data
+# Sync data on project change
 if st.session_state.get('last_project') != st.session_state.active_id:
     res = supabase.table("qa_tracker").select("*").eq("project_name", st.session_state.active_id).execute()
     st.session_state.current_df = ensure_standard_columns(pd.DataFrame(res.data))
     st.session_state.last_project = st.session_state.active_id
 
-# 8. Tabs
+# 7. Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit & Strategy", "✅ Execution Log", "🐞 Bug Center"])
 
-# --- TAB 1: SENIOR STRATEGY ---
+# --- TAB 1: SENIOR STRATEGY (STOPS AT POINT 4) ---
 with tab1:
-    st.subheader("📋 Test Strategy & Release Quality Gate")
+    st.subheader("📋 Test Strategy & Quality Gate")
     user_req = st.text_area("Paste PRD Document:", height=200)
     
     if st.button("🚀 Generate Quality Strategy"):
@@ -100,20 +105,22 @@ with tab1:
                 if len(p) >= 2:
                     rows.append({
                         "ID": f"TC-{i+1}", "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]), "Status": "Pending", 
-                        "Severity": clean_text(p[2]) if len(p)>2 else "Major", "Priority": clean_text(p[3]) if len(p)>3 else "P1",
+                        "Severity": clean_text(p[2]) if len(p)>2 and p[2].strip() else "Major", 
+                        "Priority": clean_text(p[3]) if len(p)>3 and p[3].strip() else "P1",
                         "Assigned_To": "dev@team.com", "Module": "", "Actual_Result": ""
                     })
             st.session_state.current_df = ensure_standard_columns(pd.DataFrame(rows))
             st.rerun()
 
     if st.session_state.get('audit_report'):
+        # Force cutoff before point 5
         st.markdown(st.session_state.audit_report.split("5. TEST_CASES")[0])
 
 # --- TAB 2: EXECUTION LOG ---
 with tab2:
     st.subheader(f"Execution Log: {st.session_state.active_id}")
-    # Force data_editor to update session state immediately
-    edited_df = st.data_editor(
+    # Direct session state assignment for persistent assignee saving
+    st.session_state.current_df = st.data_editor(
         st.session_state.current_df,
         use_container_width=True,
         hide_index=True,
@@ -125,11 +132,12 @@ with tab2:
             "Assigned_To": st.column_config.TextColumn("Assigned_To (Email)")
         }
     )
-    st.session_state.current_df = edited_df
 
 # --- TAB 3: BUG CENTER ---
 with tab3:
     st.subheader("🐞 Bug Center")
+    # Always re-ensure columns here just in case
+    st.session_state.current_df = ensure_standard_columns(st.session_state.current_df)
     fails = st.session_state.current_df[st.session_state.current_df["Status"] == "Fail"]
     
     if fails.empty:
@@ -139,12 +147,12 @@ with tab3:
             with st.expander(f"BUG: {bug['ID']} - {bug['Scenario']}", expanded=True):
                 c1, c2 = st.columns(2)
                 
-                # Syncing Module and Assignee
+                # Bi-directional mapping between Log and Bug Report
                 st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug['Module'], key=f"mod_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug['Assigned_To'], key=f"assign_{bug['ID']}")
                 
-                # Editable Bug Description
-                st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Actual Result / Description:", value=bug['Actual_Result'], key=f"desc_{bug['ID']}", placeholder="Describe why it failed...")
+                # Fix for the KeyError: Ensure we reference bug['Actual_Result'] only after ensure_standard_columns
+                st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Actual Result / Description:", value=bug['Actual_Result'], key=f"desc_{bug['ID']}")
                 
                 st.markdown(f"**Expected:** {bug['Expected']}")
                 st.info(f"Priority: {bug['Priority']} | Severity: {bug['Severity']}")
