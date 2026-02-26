@@ -16,6 +16,7 @@ def ensure_standard_columns(df):
             elif col == "Assigned_To": df[col] = "dev@team.com"
             elif col in ["Severity", "Priority"]: df[col] = "Major" if col == "Severity" else "P1"
             else: df[col] = ""
+    # Ensure no empty values for key execution fields
     df["Severity"] = df["Severity"].fillna("Major").replace("", "Major")
     df["Priority"] = df["Priority"].fillna("P1").replace("", "P1")
     return df
@@ -24,11 +25,10 @@ def clean_text(text):
     if not isinstance(text, str): return text
     return re.sub(r'\*\*|__', '', text).strip()
 
-# 3. Initialization
+# 3. State & Connections
 if 'current_df' not in st.session_state: st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
 if 'audit_report' not in st.session_state: st.session_state.audit_report = ""
 
-# 4. Connections
 @st.cache_resource
 def init_connection():
     try: return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -37,7 +37,7 @@ def init_connection():
 supabase = init_connection()
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
 
-# 5. Sidebar & Sync
+# 4. Sidebar Management
 with st.sidebar:
     st.title("👥 Team QA Hub")
     try:
@@ -54,9 +54,9 @@ with st.sidebar:
             row['project_name'] = st.session_state.active_id
             row['strategy_text'] = st.session_state.audit_report
         supabase.table("qa_tracker").insert(data).execute()
-        st.success("Full State Synced!")
+        st.success("State Synced!")
 
-# 6. Tabs
+# 5. Tabs
 tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit & Strategy", "✅ Execution Log", "🐞 Bug Center"])
 
 # --- TAB 1: STRATEGY ---
@@ -65,20 +65,16 @@ with tab1:
     user_req = st.text_area("Paste PRD Document:", height=150)
     
     if st.button("🚀 Generate Audit"):
-        with st.spinner("Analyzing Strategy & Capturing Doubts..."):
+        with st.spinner("Analyzing..."):
             prompt = f"""Analyze PRD: {user_req}
-            
             SECTION_STRATEGY:
             1. REWRITE: Summary.
-            2. FEATURE_TABLE: [Feature|Testing Focus|Edge Cases|Regression Impact].
+            2. FEATURE_TABLE: [Feature|Focus|Edge|Impact].
             3. STRATEGY: Must-Pass criteria.
-            4. DOUBTS: List specific queries for the Product Manager.
-            
+            4. DOUBTS: Queries for PM.
             SECTION_SEPARATOR
-            
             SECTION_CASES:
-            5. TEST_CASES: List 35+ cases. 
-            FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
+            5. TEST_CASES: List 35+ cases. FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
             
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
@@ -99,18 +95,19 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # Display logic that cuts off at the separator
+        # Split at separator
         strategy_display = st.session_state.audit_report.split("SECTION_SEPARATOR")[0].strip()
         
-        # REMOVE THE HEADLINES: Strip out the internal markers used for prompting
-        strategy_display = strategy_display.replace("SECTION_STRATEGY:", "")
-        strategy_display = strategy_display.replace("PART A - STRATEGY:", "")
-        strategy_display = strategy_display.replace("**PART A - STRATEGY**", "")
+        # Backup cutoff for leaked headers
+        strategy_display = re.split(r'SECTION_CASES|5\.?\s*TEST', strategy_display, flags=re.IGNORECASE)[0]
         
-        # Aggressive cutoff for any accidental "Test Case" or "Part B" leaks
-        strategy_display = re.split(r'PART B|SECTION_CASES|5\.?\s*TEST', strategy_display, flags=re.IGNORECASE)[0]
+        # REMOVE LABELS
+        strategy_display = strategy_display.replace("SECTION_STRATEGY:", "").strip()
         
-        st.markdown(strategy_display.strip())
+        # THE FIX: Aggressive trailing character scrub (removes **, __, #, and spaces at end)
+        strategy_display = re.sub(r'[\s\*_#\-]*$', '', strategy_display)
+        
+        st.markdown(strategy_display)
 
 # --- TAB 2: EXECUTION ---
 with tab2:
@@ -136,6 +133,7 @@ with tab3:
                 st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug.get('Module',''), key=f"mod_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug.get('Assigned_To','dev@team.com'), key=f"asgn_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Details:", value=bug.get('Actual_Result',''), key=f"desc_{bug['ID']}")
-                st.markdown(f"**Expected:** {bug['Expected']}\n**Priority:** {bug['Priority']} | **Severity:** {bug['Severity']}")
+                # RESTORED BUG INFO: Explicitly showing Priority and Severity
+                st.markdown(f"**Expected:** {bug['Expected']}\n\n**Priority:** {bug['Priority']} | **Severity:** {bug['Severity']}")
     else:
         st.info("No bugs found.")
