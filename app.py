@@ -23,6 +23,7 @@ def ensure_standard_columns(df):
 
 def clean_text(text):
     if not isinstance(text, str): return text
+    # Enhanced cleaning to strip bold markers and excess whitespace
     return re.sub(r'\*\*|__', '', text).strip()
 
 # 3. Initialization
@@ -122,10 +123,8 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # ABSOLUTE CUTOFF LOGIC
+        # ABSOLUTE CUTOFF LOGIC + ASTERISK STRIP
         report = st.session_state.audit_report
-        
-        # Define stop markers
         stop_markers = ["[STOP_STRATEGY]", "5. TEST_CASES", "5 TEST_CASES", "5. TEST CASES", "Here are 35+", "CASE:"]
         
         cutoff_index = len(report)
@@ -134,8 +133,9 @@ with tab1:
             if idx != -1 and idx < cutoff_index:
                 cutoff_index = idx
         
-        # Display only up to the first marker found
+        # Truncate and then strip dangling bold markers from the very end
         final_strategy = report[:cutoff_index].strip()
+        final_strategy = re.sub(r'(\s*\**\s*)$', '', final_strategy) # Remove trailing asterisks
         st.markdown(final_strategy)
 
 # --- TAB 2: EXECUTION LOG ---
