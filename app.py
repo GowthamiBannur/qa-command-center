@@ -49,8 +49,11 @@ client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["G
 # 5. Sidebar: Project Management
 with st.sidebar:
     st.title("👥 Team QA Hub")
-    res = supabase.table("qa_tracker").select("project_name").execute()
-    project_list = sorted(list(set([r['project_name'] for r in res.data]))) if res.data else ["Project_Alpha"]
+    try:
+        res = supabase.table("qa_tracker").select("project_name").execute()
+        project_list = sorted(list(set([r['project_name'] for r in res.data]))) if res.data else ["Project_Alpha"]
+    except:
+        project_list = ["Project_Alpha"]
     
     if 'active_id' not in st.session_state: st.session_state.active_id = project_list[0]
     current_proj = st.selectbox("Switch Project:", options=project_list + ["+ New Project"], 
@@ -72,7 +75,7 @@ with st.sidebar:
         supabase.table("qa_tracker").insert(data).execute()
         st.success("Synced!")
 
-# Data Loading Logic
+# Data Loading
 if st.session_state.get('last_project') != st.session_state.active_id:
     res = supabase.table("qa_tracker").select("*").eq("project_name", st.session_state.active_id).execute()
     st.session_state.current_df = ensure_standard_columns(pd.DataFrame(res.data))
@@ -94,7 +97,7 @@ with tab1:
             3. STRATEGY: Must-Pass criteria & PM Narrative.
             4. DOUBTS: Queries.
             
-            [SEPARATOR_DO_NOT_REMOVE]
+            [SEPARATOR]
             
             5. TEST_CASES: 35+ cases. 
             FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
@@ -102,13 +105,15 @@ with tab1:
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
             
-            # PARSER: Splits at the hard separator to keep Tab 1 clean
-            parts = res.split("[SEPARATOR_DO_NOT_REMOVE]")
-            case_section = parts[1] if len(parts) > 1 else res
+            # PARSER: Extract cases from AFTER the separator
+            parts = res.split("[SEPARATOR]")
+            case_text = parts[1] if len(parts) > 1 else res
             
-            lines = [l.replace("CASE:", "").strip() for l in case_section.split("\n") if "CASE:" in l]
+            lines = [l.replace("CASE:", "").strip() for l in case_text.split("\n") if "CASE:" in l]
             rows = []
             for i, l in enumerate(lines):
+                # Extra check to skip any header rows that look like format instructions
+                if "[Scenario]" in l or "FORMAT:" in l: continue
                 p = l.split("|")
                 if len(p) >= 2:
                     rows.append({
@@ -124,13 +129,17 @@ with tab1:
             st.rerun()
 
     if st.session_state.get('audit_report'):
-        # Display everything BEFORE the separator (Points 1-4)
-        st.markdown(st.session_state.audit_report.split("[SEPARATOR_DO_NOT_REMOVE]")[0])
+        # DYNAMIC FILTER: Remove anything after point 4 and any stray CASE: lines
+        full_text = st.session_state.audit_report.split("[SEPARATOR]")[0]
+        # Regex to remove Point 5 header if it leaked above the separator
+        clean_strategy = re.split(r'\n5\.?\s*TEST_CASES', full_text, flags=re.IGNORECASE)[0]
+        # Final safety check: remove any individual CASE: lines that might have appeared
+        clean_strategy = "\n".join([line for line in clean_strategy.split("\n") if "CASE:" not in line])
+        st.markdown(clean_strategy)
 
 # --- TAB 2: EXECUTION LOG ---
 with tab2:
     st.subheader(f"Execution Log: {st.session_state.active_id}")
-    # Updates session state immediately so Tab 3 sees the changes
     st.session_state.current_df = st.data_editor(
         st.session_state.current_df,
         use_container_width=True,
@@ -156,12 +165,8 @@ with tab3:
         for idx, bug in fails.iterrows():
             with st.expander(f"🐞 BUG: {bug['ID']} - {bug['Scenario']}", expanded=True):
                 c1, c2 = st.columns(2)
-                # Bi-directional sync for Assignee and Module
                 st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug['Module'], key=f"mod_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug['Assigned_To'], key=f"asgn_{bug['ID']}")
-                
-                # Editable Description
                 st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Actual Result / Details:", value=bug['Actual_Result'], key=f"desc_{bug['ID']}")
-                
                 st.markdown(f"**Expected:** {bug['Expected']}")
                 st.info(f"Priority: {bug['Priority']} | Severity: {bug['Severity']}")
