@@ -37,7 +37,7 @@ def init_connection():
 supabase = init_connection()
 client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
 
-# 5. Sidebar & Full Sync
+# 5. Sidebar
 with st.sidebar:
     st.title("👥 Team QA Hub")
     try:
@@ -65,12 +65,23 @@ with tab1:
     user_req = st.text_area("Paste PRD Document:", height=150)
     
     if st.button("🚀 Generate Audit"):
-        with st.spinner("Analyzing..."):
-            prompt = f"PRD: {user_req}\n1. REWRITE: Summary\n2. FEATURE_TABLE\n3. STRATEGY\n4. DOUBTS\n###X###\n5. TEST_CASES: 35+ cases. FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"
+        with st.spinner("Analyzing Strategy & Doubts..."):
+            # Prompt forces Doubts to be inside the visible section
+            prompt = f"""Analyze PRD: {user_req}
+            1. REWRITE: Summary
+            2. FEATURE_TABLE: [Feature|Focus|Edge|Impact]
+            3. STRATEGY: Must-Pass criteria
+            4. DOUBTS: List queries for PM
+            
+            ###MARKER_VISIBLE_END###
+            
+            5. TEST_CASES: 35+ cases. FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
+            
             res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
             st.session_state.audit_report = res
             
-            case_section = res.split("###X###")[1] if "###X###" in res else res
+            # Parsing cases for Tab 2
+            case_section = res.split("###MARKER_VISIBLE_END###")[1] if "###MARKER_VISIBLE_END###" in res else res
             lines = [l.replace("CASE:", "").strip() for l in case_section.split("\n") if "CASE:" in l and "|" in l]
             
             rows = []
@@ -86,16 +97,14 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # 1. HARD SPLIT at the token
-        clean_strategy = st.session_state.audit_report.split("###X###")[0].strip()
+        # Display everything BEFORE the marker, which now includes Doubts
+        visible_content = st.session_state.audit_report.split("###MARKER_VISIBLE_END###")[0].strip()
         
-        # 2. DELETE any mentioning of Test Cases or Headers at the end
-        clean_strategy = re.split(r'\n\s*5[\.\)]|\*\*5\.|\*\*Test Cases', clean_strategy, flags=re.IGNORECASE)[0].strip()
+        # Scrub any accidental trailing Test Case headers or bold markers
+        visible_content = re.split(r'\n\s*5[\.\)]|\*\*5\.|\*\*Test Cases', visible_content, flags=re.IGNORECASE)[0].strip()
+        visible_content = re.sub(r'[\s\*_#\(\[\-\)\:\.]+?$', '', visible_content)
         
-        # 3. RECURSIVE SCRUB: Deletes trailing symbols (*, _, #, spaces, brackets)
-        clean_strategy = re.sub(r'[\s\*_#\(\[\-\)\:\.]+?$', '', clean_strategy)
-        
-        st.markdown(clean_strategy)
+        st.markdown(visible_content)
 
 # --- TAB 2: EXECUTION ---
 with tab2:
@@ -121,7 +130,6 @@ with tab3:
                 st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug.get('Module',''), key=f"mod_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug.get('Assigned_To','dev@team.com'), key=f"asgn_{bug['ID']}")
                 st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Details:", value=bug.get('Actual_Result',''), key=f"desc_{bug['ID']}")
-                # Display Severity and Priority properly
                 st.info(f"Priority: {bug['Priority']} | Severity: {bug['Severity']}")
                 st.markdown(f"**Expected:** {bug['Expected']}")
     else:
