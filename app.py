@@ -5,7 +5,7 @@ import re
 from openai import OpenAI
 
 # =========================
-# CONFIG
+# PAGE CONFIG
 # =========================
 st.set_page_config(page_title="QA Command Center", layout="wide")
 
@@ -15,7 +15,7 @@ TESTCASE_FILE = "testcases.csv"
 BUG_FILE = "bugs.csv"
 
 # =========================
-# UTIL FUNCTIONS
+# HELPER FUNCTIONS
 # =========================
 def load_csv(file, columns):
     if os.path.exists(file):
@@ -28,22 +28,46 @@ def save_csv(df, file):
 
 def clean_text(text):
     text = re.sub(r"^\d+\.\s*", "", text)
-    text = re.sub(r"^(scenario|expected|expected result|severity|priority|module)\s*:\s*", "", text, flags=re.IGNORECASE)
+    text = re.sub(
+        r"^(scenario|expected|expected result|severity|priority|module)\s*:\s*",
+        "",
+        text,
+        flags=re.IGNORECASE,
+    )
     return text.strip()
 
 # =========================
 # LOAD DATA
 # =========================
-testcase_columns = ["project_id","case_id","scenario","expected","severity","priority","module","status"]
-bug_columns = ["bug_id","project_id","case_id","bug_title","severity","status"]
+testcase_columns = [
+    "project_id",
+    "case_id",
+    "scenario",
+    "expected",
+    "severity",
+    "priority",
+    "module",
+    "status",
+]
+
+bug_columns = [
+    "bug_id",
+    "project_id",
+    "case_id",
+    "bug_title",
+    "severity",
+    "status",
+]
 
 tc_df = load_csv(TESTCASE_FILE, testcase_columns)
 bug_df = load_csv(BUG_FILE, bug_columns)
 
 # =========================
-# UI TABS
+# TABS
 # =========================
-tab1, tab2, tab3 = st.tabs(["Generate Testcases", "Execution Log", "Bug Centre"])
+tab1, tab2, tab3 = st.tabs(
+    ["Generate Testcases", "Execution Log", "Bug Centre"]
+)
 
 # =========================================================
 # TAB 1 — GENERATE TESTCASES
@@ -53,7 +77,6 @@ with tab1:
     st.header("Generate AI Test Cases")
 
     project_id = st.text_input("Project ID")
-
     feature_input = st.text_area("Enter Feature / PRD")
 
     if st.button("Generate Test Cases"):
@@ -64,8 +87,7 @@ with tab1:
 
             with st.spinner("Generating test cases..."):
 
-                # Delete old test cases for this project (CLEAN MODE)
-                global tc_df
+                # CLEAN MODE: delete old test cases of this project
                 tc_df = tc_df[tc_df["project_id"] != project_id]
 
                 prompt = f"""
@@ -86,8 +108,10 @@ Feature:
 
                 response = client.chat.completions.create(
                     model="gpt-4o-mini",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3
+                    messages=[
+                        {"role": "user", "content": prompt}
+                    ],
+                    temperature=0.3,
                 )
 
                 output = response.choices[0].message.content.strip()
@@ -108,16 +132,18 @@ Feature:
 
                     scenario, expected, severity, priority, module = parts
 
-                    rows.append({
-                        "project_id": project_id,
-                        "case_id": f"TC_{tc_counter:03}",
-                        "scenario": scenario,
-                        "expected": expected,
-                        "severity": severity,
-                        "priority": priority,
-                        "module": module,
-                        "status": "Pending"
-                    })
+                    rows.append(
+                        {
+                            "project_id": project_id,
+                            "case_id": f"TC_{tc_counter:03}",
+                            "scenario": scenario,
+                            "expected": expected,
+                            "severity": severity,
+                            "priority": priority,
+                            "module": module,
+                            "status": "Pending",
+                        }
+                    )
 
                     tc_counter += 1
 
@@ -140,11 +166,14 @@ with tab2:
         st.info("No test cases available.")
     else:
 
-        edited_df = st.data_editor(tc_df, use_container_width=True)
+        edited_df = st.data_editor(
+            tc_df,
+            use_container_width=True,
+        )
 
         if st.button("Save Execution Updates"):
             save_csv(edited_df, TESTCASE_FILE)
-            st.success("Execution log updated.")
+            st.success("Execution log updated successfully.")
 
 # =========================================================
 # TAB 3 — BUG CENTRE
@@ -157,15 +186,30 @@ with tab3:
         st.info("Generate test cases first.")
     else:
 
-        project_filter = st.selectbox("Select Project", tc_df["project_id"].unique())
+        project_filter = st.selectbox(
+            "Select Project",
+            tc_df["project_id"].unique(),
+        )
 
-        project_cases = tc_df[tc_df["project_id"] == project_filter]
+        project_cases = tc_df[
+            tc_df["project_id"] == project_filter
+        ]
 
-        case_select = st.selectbox("Select Test Case", project_cases["case_id"])
+        case_select = st.selectbox(
+            "Select Test Case",
+            project_cases["case_id"],
+        )
 
         bug_title = st.text_input("Bug Title")
-        bug_severity = st.selectbox("Severity", ["Low", "Medium", "High", "Critical"])
-        bug_status = st.selectbox("Status", ["Open", "In Progress", "Closed"])
+        bug_severity = st.selectbox(
+            "Severity",
+            ["Low", "Medium", "High", "Critical"],
+        )
+
+        bug_status = st.selectbox(
+            "Status",
+            ["Open", "In Progress", "Closed"],
+        )
 
         if st.button("Report Bug"):
 
@@ -175,16 +219,22 @@ with tab3:
 
                 bug_id = f"BUG_{len(bug_df)+1:03}"
 
-                new_bug = pd.DataFrame([{
-                    "bug_id": bug_id,
-                    "project_id": project_filter,
-                    "case_id": case_select,
-                    "bug_title": bug_title,
-                    "severity": bug_severity,
-                    "status": bug_status
-                }])
+                new_bug = pd.DataFrame(
+                    [
+                        {
+                            "bug_id": bug_id,
+                            "project_id": project_filter,
+                            "case_id": case_select,
+                            "bug_title": bug_title,
+                            "severity": bug_severity,
+                            "status": bug_status,
+                        }
+                    ]
+                )
 
-                bug_df = pd.concat([bug_df, new_bug], ignore_index=True)
+                bug_df = pd.concat(
+                    [bug_df, new_bug], ignore_index=True
+                )
 
                 save_csv(bug_df, BUG_FILE)
 
