@@ -4,18 +4,18 @@ from openai import OpenAI
 import re
 from supabase import create_client
 
-# ----------------------------------
+# ----------------------------------------------------
 # PAGE CONFIG
-# ----------------------------------
+# ----------------------------------------------------
 st.set_page_config(
     page_title="Principal QA Strategy Hub",
     layout="wide",
     page_icon="🛡️"
 )
 
-# ----------------------------------
+# ----------------------------------------------------
 # CONNECTIONS
-# ----------------------------------
+# ----------------------------------------------------
 @st.cache_resource
 def init_connection():
     return create_client(
@@ -30,32 +30,30 @@ client = OpenAI(
     api_key=st.secrets["GROQ_API_KEY"]
 )
 
-# ----------------------------------
-# SESSION DEFAULTS
-# ----------------------------------
-for key in [
-    "rewrite",
-    "feature_table",
-    "strategy",
-    "doubts",
-    "current_df"
-]:
-    if key not in st.session_state:
-        st.session_state[key] = ""
-
-if "current_df" not in st.session_state:
+# ----------------------------------------------------
+# SESSION INITIALIZATION (SAFE)
+# ----------------------------------------------------
+if "initialized" not in st.session_state:
+    st.session_state.initialized = True
+    st.session_state.rewrite = ""
+    st.session_state.feature_table = ""
+    st.session_state.strategy = ""
+    st.session_state.doubts = ""
     st.session_state.current_df = pd.DataFrame()
+    st.session_state.active_project = None
+    st.session_state.project_id = None
+    st.session_state.loaded_project = None
 
-# ----------------------------------
+# ----------------------------------------------------
 # HELPERS
-# ----------------------------------
-
+# ----------------------------------------------------
 def ensure_columns(df):
     required = [
         "ID", "Scenario", "Expected", "Status",
         "Severity", "Priority", "Module",
         "Assigned_To", "Actual_Result", "Evidence_Link"
     ]
+
     for col in required:
         if col not in df.columns:
             df[col] = ""
@@ -65,24 +63,27 @@ def ensure_columns(df):
 
     return df
 
+
 def get_projects():
     res = supabase.table("projects").select("*").execute()
     return res.data if res.data else []
 
+
 def create_project(name):
     supabase.table("projects").insert({"name": name}).execute()
+
 
 def get_project_id(name):
     res = supabase.table("projects").select("id").eq("name", name).execute()
     return res.data[0]["id"] if res.data else None
 
-def parse_strategy_output(text):
+
+def parse_sections(text):
     sections = {
         "rewrite": "",
         "feature_table": "",
         "strategy": "",
-        "doubts": "",
-        "test_cases": ""
+        "doubts": ""
     }
 
     current = None
@@ -98,16 +99,15 @@ def parse_strategy_output(text):
             current = "strategy"
         elif "DOUBTS" in upper:
             current = "doubts"
-        elif "TEST_CASES" in upper:
-            current = "test_cases"
         elif current:
             sections[current] += line + "\n"
 
     return sections
 
-# ----------------------------------
-# SIDEBAR - PROJECT MANAGEMENT
-# ----------------------------------
+
+# ----------------------------------------------------
+# SIDEBAR
+# ----------------------------------------------------
 with st.sidebar:
     st.title("👥 Team QA Hub")
 
@@ -129,13 +129,17 @@ with st.sidebar:
         st.session_state.active_project = selected
         st.session_state.project_id = get_project_id(selected)
 
-# ----------------------------------
-# LOAD DATA WHEN PROJECT CHANGES
-# ----------------------------------
-if "active_project" in st.session_state:
+# ----------------------------------------------------
+# LOAD DATA ONLY WHEN PROJECT CHANGES
+# ----------------------------------------------------
+if (
+    st.session_state.active_project
+    and st.session_state.active_project != st.session_state.loaded_project
+):
 
     pid = st.session_state.project_id
 
+    # Load Strategy
     strat = supabase.table("strategies") \
         .select("*") \
         .eq("project_id", pid) \
@@ -153,6 +157,7 @@ if "active_project" in st.session_state:
         st.session_state.strategy = ""
         st.session_state.doubts = ""
 
+    # Load Test Cases
     cases = supabase.table("test_cases") \
         .select("*") \
         .eq("project_id", pid) \
@@ -178,18 +183,20 @@ if "active_project" in st.session_state:
     else:
         st.session_state.current_df = ensure_columns(pd.DataFrame())
 
-# ----------------------------------
+    st.session_state.loaded_project = st.session_state.active_project
+
+# ----------------------------------------------------
 # TABS
-# ----------------------------------
+# ----------------------------------------------------
 tab1, tab2, tab3 = st.tabs([
     "🏗️ Senior QA Audit & Strategy",
     "✅ Execution Log",
     "🐞 Bug Center"
 ])
 
-# ----------------------------------
+# ----------------------------------------------------
 # TAB 1 - STRATEGY
-# ----------------------------------
+# ----------------------------------------------------
 with tab1:
 
     st.subheader("📋 Test Strategy & Quality Gate")
@@ -198,16 +205,20 @@ with tab1:
 
     if st.button("🚀 Generate Quality Strategy"):
 
-        prompt = f"""
-        Analyze the PRD below.
+        if not prd_text.strip():
+            st.warning("Please enter PRD.")
+            st.stop()
 
-        1. REWRITE: Summary
+        prompt = f"""
+        Analyze PRD:
+
+        1. REWRITE
         2. FEATURE_TABLE
         3. STRATEGY
         4. DOUBTS
         5. TEST_CASES (35+)
 
-        Format test cases as:
+        Format test cases:
         CASE: Scenario | Expected | Severity | Priority
 
         PRD:
@@ -223,7 +234,7 @@ with tab1:
 
             result = response.choices[0].message.content
 
-            sections = parse_strategy_output(result)
+            sections = parse_sections(result)
 
             st.session_state.rewrite = sections["rewrite"]
             st.session_state.feature_table = sections["feature_table"]
@@ -231,49 +242,70 @@ with tab1:
             st.session_state.doubts = sections["doubts"]
 
             # Parse Test Cases
-            lines = [
-                l.replace("CASE:", "").strip()
-                for l in sections["test_cases"].split("\n")
-                if "CASE:" in l
-            ]
+            pattern = r"CASE:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)$"
+            matches = re.findall(pattern, result, re.MULTILINE)
 
             rows = []
+            for i, match in enumerate(matches):
+                scenario, expected, severity, priority = match
 
-            for i, line in enumerate(lines):
-                parts = [p.strip() for p in line.split("|")]
-
-                if len(parts) >= 2:
-                    rows.append({
-                        "ID": f"TC-{i+1}",
-                        "Scenario": parts[0],
-                        "Expected": parts[1],
-                        "Status": "Pending",
-                        "Severity": parts[2] if len(parts) > 2 else "Major",
-                        "Priority": parts[3] if len(parts) > 3 else "P1",
-                        "Module": "",
-                        "Assigned_To": "",
-                        "Actual_Result": "",
-                        "Evidence_Link": ""
-                    })
+                rows.append({
+                    "ID": f"TC-{i+1}",
+                    "Scenario": scenario.strip(),
+                    "Expected": expected.strip(),
+                    "Status": "Pending",
+                    "Severity": severity.strip(),
+                    "Priority": priority.strip(),
+                    "Module": "",
+                    "Assigned_To": "",
+                    "Actual_Result": "",
+                    "Evidence_Link": ""
+                })
 
             st.session_state.current_df = ensure_columns(pd.DataFrame(rows))
 
-    # Display Sections
-    st.markdown("## 1️⃣ REWRITE")
-    st.markdown(st.session_state.rewrite)
+    # Only show sections if content exists
+    if any([
+        st.session_state.rewrite,
+        st.session_state.feature_table,
+        st.session_state.strategy,
+        st.session_state.doubts
+    ]):
 
-    st.markdown("## 2️⃣ FEATURE TABLE")
-    st.markdown(st.session_state.feature_table)
+        st.markdown("## 1️⃣ REWRITE")
+        st.markdown(st.session_state.rewrite)
 
-    st.markdown("## 3️⃣ STRATEGY")
-    st.markdown(st.session_state.strategy)
+        st.markdown("## 2️⃣ FEATURE TABLE")
+        st.markdown(st.session_state.feature_table)
 
-    st.markdown("## 4️⃣ DOUBTS")
-    st.markdown(st.session_state.doubts)
+        st.markdown("## 3️⃣ STRATEGY")
+        st.markdown(st.session_state.strategy)
 
-# ----------------------------------
+        st.markdown("## 4️⃣ DOUBTS")
+        st.markdown(st.session_state.doubts)
+
+        if st.button("💾 Save Strategy"):
+            pid = st.session_state.project_id
+
+            supabase.table("strategies") \
+                .delete() \
+                .eq("project_id", pid) \
+                .execute()
+
+            supabase.table("strategies").insert({
+                "project_id": pid,
+                "prd_text": prd_text,
+                "strategy_text": st.session_state.strategy,
+                "rewrite": st.session_state.rewrite,
+                "feature_table": st.session_state.feature_table,
+                "doubts": st.session_state.doubts
+            }).execute()
+
+            st.success("Strategy Saved")
+
+# ----------------------------------------------------
 # TAB 2 - EXECUTION LOG
-# ----------------------------------
+# ----------------------------------------------------
 with tab2:
 
     st.subheader("Execution Log")
@@ -312,9 +344,9 @@ with tab2:
 
         st.success("Execution Log Saved")
 
-# ----------------------------------
+# ----------------------------------------------------
 # TAB 3 - BUG CENTER
-# ----------------------------------
+# ----------------------------------------------------
 with tab3:
 
     st.subheader("🐞 Bug Center")
@@ -326,7 +358,6 @@ with tab3:
         st.info("No failed test cases.")
     else:
         for idx, bug in fails.iterrows():
-
             with st.expander(f"{bug['ID']} - {bug['Scenario']}"):
 
                 module = st.text_input("Module", bug["Module"], key=f"mod{idx}")
