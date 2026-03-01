@@ -1,381 +1,207 @@
 import streamlit as st
-import pandas as pd
-from openai import OpenAI
-import re
-from supabase import create_client
+import sqlite3
+import json
+from datetime import datetime
 
-# ----------------------------------------------------
-# PAGE CONFIG
-# ----------------------------------------------------
-st.set_page_config(
-    page_title="Principal QA Strategy Hub",
-    layout="wide",
-    page_icon="🛡️"
+# ---------------- DB SETUP ---------------- #
+
+conn = sqlite3.connect("qa_tool.db", check_same_thread=False)
+cursor = conn.cursor()
+
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT
 )
+""")
 
-# ----------------------------------------------------
-# CONNECTIONS
-# ----------------------------------------------------
-@st.cache_resource
-def init_connection():
-    return create_client(
-        st.secrets["SUPABASE_URL"],
-        st.secrets["SUPABASE_KEY"]
-    )
-
-supabase = init_connection()
-
-client = OpenAI(
-    base_url="https://api.groq.com/openai/v1",
-    api_key=st.secrets["GROQ_API_KEY"]
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS audit (
+    project_id INTEGER,
+    rewrite TEXT,
+    feature_table TEXT,
+    strategy TEXT,
+    doubts TEXT,
+    FOREIGN KEY(project_id) REFERENCES projects(id)
 )
+""")
 
-# ----------------------------------------------------
-# SESSION INITIALIZATION (SAFE)
-# ----------------------------------------------------
-if "initialized" not in st.session_state:
-    st.session_state.initialized = True
-    st.session_state.rewrite = ""
-    st.session_state.feature_table = ""
-    st.session_state.strategy = ""
-    st.session_state.doubts = ""
-    st.session_state.current_df = pd.DataFrame()
-    st.session_state.active_project = None
-    st.session_state.project_id = None
-    st.session_state.loaded_project = None
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS test_cases (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER,
+    title TEXT,
+    steps TEXT,
+    expected TEXT,
+    assigned_to TEXT,
+    status TEXT DEFAULT 'Pending',
+    FOREIGN KEY(project_id) REFERENCES projects(id)
+)
+""")
 
-# ----------------------------------------------------
-# HELPERS
-# ----------------------------------------------------
-def ensure_columns(df):
-    required = [
-        "ID", "Scenario", "Expected", "Status",
-        "Severity", "Priority", "Module",
-        "Assigned_To", "Actual_Result", "Evidence_Link"
-    ]
+cursor.execute("""
+CREATE TABLE IF NOT EXISTS bugs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    project_id INTEGER,
+    test_case_id INTEGER,
+    title TEXT,
+    description TEXT,
+    assigned_to TEXT,
+    created_at TEXT,
+    FOREIGN KEY(project_id) REFERENCES projects(id)
+)
+""")
 
-    for col in required:
-        if col not in df.columns:
-            df[col] = ""
+conn.commit()
 
-    if "Status" in df.columns:
-        df["Status"] = df["Status"].replace("", "Pending")
-
-    return df
-
+# ---------------- HELPER FUNCTIONS ---------------- #
 
 def get_projects():
-    res = supabase.table("projects").select("*").execute()
-    return res.data if res.data else []
+    cursor.execute("SELECT id, name FROM projects")
+    return cursor.fetchall()
 
+def get_audit(project_id):
+    cursor.execute("SELECT rewrite, feature_table, strategy, doubts FROM audit WHERE project_id=?", (project_id,))
+    return cursor.fetchone()
 
-def create_project(name):
-    supabase.table("projects").insert({"name": name}).execute()
+def save_audit(project_id, rewrite, feature_table, strategy, doubts):
+    cursor.execute("DELETE FROM audit WHERE project_id=?", (project_id,))
+    cursor.execute("INSERT INTO audit VALUES (?, ?, ?, ?, ?)", 
+                   (project_id, rewrite, feature_table, strategy, doubts))
+    conn.commit()
 
+def get_test_cases(project_id):
+    cursor.execute("SELECT id, title, steps, expected, assigned_to, status FROM test_cases WHERE project_id=?", (project_id,))
+    return cursor.fetchall()
 
-def get_project_id(name):
-    res = supabase.table("projects").select("id").eq("name", name).execute()
-    return res.data[0]["id"] if res.data else None
+def save_bug(project_id, test_case_id, title, desc, assigned):
+    cursor.execute("""
+        INSERT INTO bugs (project_id, test_case_id, title, description, assigned_to, created_at)
+        VALUES (?, ?, ?, ?, ?, ?)
+    """, (project_id, test_case_id, title, desc, assigned, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    conn.commit()
 
+def get_bugs(project_id):
+    cursor.execute("SELECT id, title, description, assigned_to, created_at FROM bugs WHERE project_id=?", (project_id,))
+    return cursor.fetchall()
 
-def parse_sections(text):
-    sections = {
-        "rewrite": "",
-        "feature_table": "",
-        "strategy": "",
-        "doubts": ""
-    }
+# ---------------- UI ---------------- #
 
-    current = None
+st.title("🏗️ Senior QA Operating System")
 
-    for line in text.split("\n"):
-        upper = line.upper()
+# Project Selection
+projects = get_projects()
+project_names = [p[1] for p in projects]
 
-        if "REWRITE" in upper:
-            current = "rewrite"
-        elif "FEATURE_TABLE" in upper:
-            current = "feature_table"
-        elif "STRATEGY" in upper and "TEST_CASES" not in upper:
-            current = "strategy"
-        elif "DOUBTS" in upper:
-            current = "doubts"
-        elif current:
-            sections[current] += line + "\n"
+new_project = st.text_input("Create New Project")
+if st.button("Create Project"):
+    cursor.execute("INSERT INTO projects (name) VALUES (?)", (new_project,))
+    conn.commit()
+    st.rerun()
 
-    return sections
+if projects:
+    selected_name = st.selectbox("Select Project", project_names)
+    selected_project = [p for p in projects if p[1] == selected_name][0]
+    project_id = selected_project[0]
 
+    tabs = st.tabs(["🏗️ Senior QA Audit & Strategy", "🧪 Test Cases", "✅ Execution Log", "🐞 Bug Center"])
 
-# ----------------------------------------------------
-# SIDEBAR
-# ----------------------------------------------------
-with st.sidebar:
-    st.title("👥 Team QA Hub")
+    # ---------------- TAB A ---------------- #
+    with tabs[0]:
+        st.subheader("Senior QA Audit & Strategy")
 
-    projects = get_projects()
-    project_names = [p["name"] for p in projects]
+        audit_data = get_audit(project_id)
+        rewrite = audit_data[0] if audit_data else ""
+        feature_table = audit_data[1] if audit_data else ""
+        strategy = audit_data[2] if audit_data else ""
+        doubts = audit_data[3] if audit_data else ""
 
-    selected = st.selectbox(
-        "Switch Project",
-        options=project_names + ["+ New Project"]
-    )
+        rewrite = st.text_area("1️⃣ REWRITE", rewrite, height=150)
+        feature_table = st.text_area("2️⃣ FEATURE TABLE", feature_table, height=150)
+        strategy = st.text_area("3️⃣ STRATEGY", strategy, height=150)
+        doubts = st.text_area("4️⃣ DOUBTS", doubts, height=150)
 
-    if selected == "+ New Project":
-        new_name = st.text_input("New Project Name")
-        if st.button("Create Project"):
-            create_project(new_name)
-            st.success("Project Created")
+        if st.button("Save Audit"):
+            save_audit(project_id, rewrite, feature_table, strategy, doubts)
+            st.success("Saved")
+
+    # ---------------- TAB B ---------------- #
+    with tabs[1]:
+        st.subheader("Test Case Management")
+
+        title = st.text_input("Test Case Title")
+        steps = st.text_area("Steps")
+        expected = st.text_area("Expected Result")
+        assigned = st.text_input("Assign Developer")
+
+        if st.button("Add Test Case"):
+            cursor.execute("""
+                INSERT INTO test_cases (project_id, title, steps, expected, assigned_to)
+                VALUES (?, ?, ?, ?, ?)
+            """, (project_id, title, steps, expected, assigned))
+            conn.commit()
+            st.success("Test Case Added")
             st.rerun()
-    else:
-        st.session_state.active_project = selected
-        st.session_state.project_id = get_project_id(selected)
 
-# ----------------------------------------------------
-# LOAD DATA ONLY WHEN PROJECT CHANGES
-# ----------------------------------------------------
-if (
-    st.session_state.active_project
-    and st.session_state.active_project != st.session_state.loaded_project
-):
+        st.divider()
 
-    pid = st.session_state.project_id
+        test_cases = get_test_cases(project_id)
 
-    # Load Strategy
-    strat = supabase.table("strategies") \
-        .select("*") \
-        .eq("project_id", pid) \
-        .execute()
+        for tc in test_cases:
+            st.markdown(f"### {tc[1]}")
+            st.write(f"**Assigned To:** {tc[4]}")
+            st.write(f"Steps: {tc[2]}")
+            st.write(f"Expected: {tc[3]}")
+            st.write(f"Status: {tc[5]}")
+            st.divider()
 
-    if strat.data:
-        data = strat.data[0]
-        st.session_state.rewrite = data.get("rewrite", "")
-        st.session_state.feature_table = data.get("feature_table", "")
-        st.session_state.strategy = data.get("strategy_text", "")
-        st.session_state.doubts = data.get("doubts", "")
-    else:
-        st.session_state.rewrite = ""
-        st.session_state.feature_table = ""
-        st.session_state.strategy = ""
-        st.session_state.doubts = ""
+    # ---------------- TAB C ---------------- #
+    with tabs[2]:
+        st.subheader("Execution Log")
 
-    # Load Test Cases
-    cases = supabase.table("test_cases") \
-        .select("*") \
-        .eq("project_id", pid) \
-        .execute()
+        test_cases = get_test_cases(project_id)
 
-    if cases.data:
-        df = pd.DataFrame(cases.data)
-
-        df = df.rename(columns={
-            "case_id": "ID",
-            "scenario": "Scenario",
-            "expected": "Expected",
-            "status": "Status",
-            "severity": "Severity",
-            "priority": "Priority",
-            "module": "Module",
-            "assigned_to": "Assigned_To",
-            "actual_result": "Actual_Result",
-            "evidence_link": "Evidence_Link"
-        })
-
-        st.session_state.current_df = ensure_columns(df)
-    else:
-        st.session_state.current_df = ensure_columns(pd.DataFrame())
-
-    st.session_state.loaded_project = st.session_state.active_project
-
-# ----------------------------------------------------
-# TABS
-# ----------------------------------------------------
-tab1, tab2, tab3 = st.tabs([
-    "🏗️ Senior QA Audit & Strategy",
-    "✅ Execution Log",
-    "🐞 Bug Center"
-])
-
-# ----------------------------------------------------
-# TAB 1 - STRATEGY
-# ----------------------------------------------------
-with tab1:
-
-    st.subheader("📋 Test Strategy & Quality Gate")
-
-    prd_text = st.text_area("Paste PRD Document", height=200)
-
-    if st.button("🚀 Generate Quality Strategy"):
-
-        if not prd_text.strip():
-            st.warning("Please enter PRD.")
-            st.stop()
-
-        prompt = f"""
-        Analyze PRD:
-
-        1. REWRITE
-        2. FEATURE_TABLE
-        3. STRATEGY
-        4. DOUBTS
-        5. TEST_CASES (35+)
-
-        Format test cases:
-        CASE: Scenario | Expected | Severity | Priority
-
-        PRD:
-        {prd_text}
-        """
-
-        with st.spinner("Generating..."):
-
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}]
+        for tc in test_cases:
+            st.markdown(f"### {tc[1]}")
+            status = st.selectbox(
+                "Status",
+                ["Pending", "Pass", "Fail"],
+                index=["Pending", "Pass", "Fail"].index(tc[5]),
+                key=f"status_{tc[0]}"
             )
 
-            result = response.choices[0].message.content
+            if status != tc[5]:
+                cursor.execute("UPDATE test_cases SET status=? WHERE id=?", (status, tc[0]))
+                conn.commit()
 
-            sections = parse_sections(result)
+                if status == "Fail":
+                    save_bug(
+                        project_id,
+                        tc[0],
+                        f"Bug from: {tc[1]}",
+                        f"Auto-generated from failed test case.\n\nSteps:\n{tc[2]}",
+                        tc[4]
+                    )
+                st.rerun()
 
-            st.session_state.rewrite = sections["rewrite"]
-            st.session_state.feature_table = sections["feature_table"]
-            st.session_state.strategy = sections["strategy"]
-            st.session_state.doubts = sections["doubts"]
+            st.write(f"Assigned To: {tc[4]}")
+            st.divider()
 
-            # Parse Test Cases
-            pattern = r"CASE:\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)\s*\|\s*(.*?)$"
-            matches = re.findall(pattern, result, re.MULTILINE)
+    # ---------------- TAB D ---------------- #
+    with tabs[3]:
+        st.subheader("Bug Center")
 
-            rows = []
-            for i, match in enumerate(matches):
-                scenario, expected, severity, priority = match
+        bugs = get_bugs(project_id)
 
-                rows.append({
-                    "ID": f"TC-{i+1}",
-                    "Scenario": scenario.strip(),
-                    "Expected": expected.strip(),
-                    "Status": "Pending",
-                    "Severity": severity.strip(),
-                    "Priority": priority.strip(),
-                    "Module": "",
-                    "Assigned_To": "",
-                    "Actual_Result": "",
-                    "Evidence_Link": ""
-                })
+        if bugs:
+            for bug in bugs:
+                st.markdown(f"### 🐞 {bug[1]}")
+                st.write(f"**Assigned To:** {bug[3]}")
+                st.write(f"**Created At:** {bug[4]}")
+                st.text_area("Description", bug[2], key=f"bug_{bug[0]}")
+                st.divider()
+        else:
+            st.info("No Bugs Yet")
 
-            st.session_state.current_df = ensure_columns(pd.DataFrame(rows))
-
-    # Only show sections if content exists
-    if any([
-        st.session_state.rewrite,
-        st.session_state.feature_table,
-        st.session_state.strategy,
-        st.session_state.doubts
-    ]):
-
-        st.markdown("## 1️⃣ REWRITE")
-        st.markdown(st.session_state.rewrite)
-
-        st.markdown("## 2️⃣ FEATURE TABLE")
-        st.markdown(st.session_state.feature_table)
-
-        st.markdown("## 3️⃣ STRATEGY")
-        st.markdown(st.session_state.strategy)
-
-        st.markdown("## 4️⃣ DOUBTS")
-        st.markdown(st.session_state.doubts)
-
-        if st.button("💾 Save Strategy"):
-            pid = st.session_state.project_id
-
-            supabase.table("strategies") \
-                .delete() \
-                .eq("project_id", pid) \
-                .execute()
-
-            supabase.table("strategies").insert({
-                "project_id": pid,
-                "prd_text": prd_text,
-                "strategy_text": st.session_state.strategy,
-                "rewrite": st.session_state.rewrite,
-                "feature_table": st.session_state.feature_table,
-                "doubts": st.session_state.doubts
-            }).execute()
-
-            st.success("Strategy Saved")
-
-# ----------------------------------------------------
-# TAB 2 - EXECUTION LOG
-# ----------------------------------------------------
-with tab2:
-
-    st.subheader("Execution Log")
-
-    st.session_state.current_df = st.data_editor(
-        st.session_state.current_df,
-        use_container_width=True,
-        hide_index=True
-    )
-
-    if st.button("💾 Save Execution Updates"):
-
-        pid = st.session_state.project_id
-
-        supabase.table("test_cases") \
-            .delete() \
-            .eq("project_id", pid) \
-            .execute()
-
-        records = st.session_state.current_df.to_dict("records")
-
-        for r in records:
-            r["project_id"] = pid
-            r["case_id"] = r.pop("ID")
-            r["scenario"] = r.pop("Scenario")
-            r["expected"] = r.pop("Expected")
-            r["status"] = r.pop("Status")
-            r["severity"] = r.pop("Severity")
-            r["priority"] = r.pop("Priority")
-            r["module"] = r.pop("Module")
-            r["assigned_to"] = r.pop("Assigned_To")
-            r["actual_result"] = r.pop("Actual_Result")
-            r["evidence_link"] = r.pop("Evidence_Link")
-
-        supabase.table("test_cases").insert(records).execute()
-
-        st.success("Execution Log Saved")
-
-# ----------------------------------------------------
-# TAB 3 - BUG CENTER
-# ----------------------------------------------------
-with tab3:
-
-    st.subheader("🐞 Bug Center")
-
-    df = st.session_state.current_df
-    fails = df[df["Status"] == "Fail"]
-
-    if fails.empty:
-        st.info("No failed test cases.")
-    else:
-        for idx, bug in fails.iterrows():
-            with st.expander(f"{bug['ID']} - {bug['Scenario']}"):
-
-                module = st.text_input("Module", bug["Module"], key=f"mod{idx}")
-                assigned = st.text_input("Assign To", bug["Assigned_To"], key=f"as{idx}")
-                actual = st.text_area("Actual Result", bug["Actual_Result"], key=f"act{idx}")
-
-                if st.button("Save Bug", key=f"save{idx}"):
-
-                    supabase.table("bugs").insert({
-                        "project_id": st.session_state.project_id,
-                        "case_id": bug["ID"],
-                        "scenario": bug["Scenario"],
-                        "expected": bug["Expected"],
-                        "actual_result": actual,
-                        "severity": bug["Severity"],
-                        "priority": bug["Priority"],
-                        "module": module,
-                        "assigned_to": assigned
-                    }).execute()
-
-                    st.success("Bug Saved")
+else:
+    st.info("Create a project to begin.")
