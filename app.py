@@ -2,189 +2,349 @@ import streamlit as st
 import pandas as pd
 from openai import OpenAI
 import re
-from supabase import create_client, Client
+from supabase import create_client
 
-# 1. Page Config
-st.set_page_config(page_title="Principal QA Strategy Hub", layout="wide", page_icon="🛡️")
+# ----------------------------------
+# PAGE CONFIG
+# ----------------------------------
+st.set_page_config(
+    page_title="Principal QA Strategy Hub",
+    layout="wide",
+    page_icon="🛡️"
+)
 
-# 2. Crash Protection & Schema Logic
-def ensure_standard_columns(df):
-    """Guarantees every field exists and is filled to prevent KeyErrors."""
-    required = ["ID", "Scenario", "Expected", "Status", "Severity", "Priority", "Evidence_Link", "Assigned_To", "Module", "Actual_Result"]
-    for col in required:
-        if col not in df.columns:
-            if col == "Status": df[col] = "Pending"
-            elif col == "Assigned_To": df[col] = "dev@team.com"
-            elif col in ["Severity", "Priority"]: df[col] = "Major" if col == "Severity" else "P1"
-            else: df[col] = ""
-    
-    df["Severity"] = df["Severity"].fillna("Major").replace("", "Major")
-    df["Priority"] = df["Priority"].fillna("P1").replace("", "P1")
-    df["Actual_Result"] = df["Actual_Result"].fillna("")
-    return df
-
-def clean_text(text):
-    if not isinstance(text, str): return text
-    return re.sub(r'\*\*|__', '', text).strip()
-
-# 3. Initialization
-if 'current_df' not in st.session_state:
-    st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
-if 'audit_report' not in st.session_state:
-    st.session_state.audit_report = ""
-
-# 4. Connections
+# ----------------------------------
+# CONNECTIONS
+# ----------------------------------
 @st.cache_resource
 def init_connection():
-    try:
-        return create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-    except:
-        st.error("Check Supabase Secrets!")
-        return None
-
-supabase = init_connection()
-client = OpenAI(base_url="https://api.groq.com/openai/v1", api_key=st.secrets["GROQ_API_KEY"])
-
-# 5. Sidebar: Project Management
-with st.sidebar:
-    st.title("👥 Team QA Hub")
-    try:
-        res = supabase.table("qa_tracker").select("project_name").execute()
-        project_list = sorted(list(set([r['project_name'] for r in res.data]))) if res.data else ["Project_Alpha"]
-    except:
-        project_list = ["Project_Alpha"]
-    
-    if 'active_id' not in st.session_state: st.session_state.active_id = project_list[0]
-    current_proj = st.selectbox("Switch Project:", options=project_list + ["+ New Project"], 
-                                index=project_list.index(st.session_state.active_id) if st.session_state.active_id in project_list else 0)
-    
-    if current_proj == "+ New Project":
-        new_name = st.text_input("New Project Name:")
-        if st.button("Create"):
-            st.session_state.active_id = new_name
-            st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
-            st.session_state.audit_report = ""
-            st.rerun()
-    else:
-        st.session_state.active_id = current_proj
-
-    # --- REPLACED SYNC LOGIC: Prevents APIError and Saves Strategy ---
-    if st.button("🌊 Sync Full Project (All Tabs)", use_container_width=True):
-        try:
-            # 1. Clear old data for this project
-            supabase.table("qa_tracker").delete().eq("project_name", st.session_state.active_id).execute()
-            
-            # 2. Prepare Data
-            data_df = st.session_state.current_df.copy()
-            
-            # 3. Handle empty tables to ensure Strategy still saves
-            if data_df.empty:
-                meta_row = pd.DataFrame([{"ID": "META", "Scenario": "Strategy Backup"}])
-                data_df = ensure_standard_columns(meta_row)
-            
-            data = data_df.to_dict(orient='records')
-            for row in data: 
-                row['project_name'] = st.session_state.active_id
-                row['strategy_text'] = st.session_state.audit_report 
-            
-            # 4. Insert to Supabase
-            supabase.table("qa_tracker").insert(data).execute()
-            st.success(f"Successfully Synced '{st.session_state.active_id}'!")
-        except Exception as e:
-            st.error("Sync Failed! Check if your table has the 'strategy_text' column.")
-            st.info("Run in SQL Editor: ALTER TABLE qa_tracker ADD COLUMN IF NOT EXISTS strategy_text TEXT;")
-
-# 6. Data Loading (Restores Tab 1 + Tab 2 + Tab 3)
-if st.session_state.get('last_project') != st.session_state.active_id:
-    res = supabase.table("qa_tracker").select("*").eq("project_name", st.session_state.active_id).execute()
-    if res.data:
-        df_loaded = pd.DataFrame(res.data)
-        # Filter out the hidden metadata row
-        if not df_loaded.empty:
-            df_loaded = df_loaded[df_loaded["ID"] != "META"]
-            st.session_state.current_df = ensure_standard_columns(df_loaded)
-            st.session_state.audit_report = res.data[0].get('strategy_text', "")
-    else:
-        st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
-        st.session_state.audit_report = ""
-    st.session_state.last_project = st.session_state.active_id
-
-# 7. Tabs
-tab1, tab2, tab3 = st.tabs(["🏗️ Senior QA Audit & Strategy", "✅ Execution Log", "🐞 Bug Center"])
-
-# --- TAB 1: SENIOR STRATEGY ---
-with tab1:
-    st.subheader("📋 Test Strategy & Quality Gate")
-    user_req = st.text_area("Paste PRD Document:", height=200)
-    
-    if st.button("🚀 Generate Quality Strategy"):
-        with st.spinner("Generating Strategy and 35+ Test Cases..."):
-            prompt = f"""Analyze PRD: {user_req}
-            1. REWRITE: Summary.
-            2. FEATURE_TABLE: [Feature | Testing Focus | Edge Cases | Regression Impact].
-            3. STRATEGY: Must-Pass criteria & PM Narrative.
-            4. DOUBTS: Queries for PO.
-            
-            [SEPARATOR]
-            
-            5. TEST_CASES: 35+ cases. 
-            FORMAT: 'CASE: [Scenario] | [Expected] | [Severity] | [Priority]'"""
-            
-            res = client.chat.completions.create(model="llama-3.3-70b-versatile", messages=[{"role": "user", "content": prompt}]).choices[0].message.content
-            st.session_state.audit_report = res
-            
-            parts = res.split("[SEPARATOR]")
-            case_text = parts[1] if len(parts) > 1 else res
-            
-            lines = [l.replace("CASE:", "").strip() for l in case_text.split("\n") if "CASE:" in l]
-            rows = []
-            for i, l in enumerate(lines):
-                if "[Scenario]" in l or "FORMAT:" in l: continue
-                p = l.split("|")
-                if len(p) >= 2:
-                    rows.append({
-                        "ID": f"TC-{i+1}", 
-                        "Scenario": clean_text(p[0]), "Expected": clean_text(p[1]), "Status": "Pending", 
-                        "Severity": clean_text(p[2]) if len(p)>2 and p[2].strip() else "Major", 
-                        "Priority": clean_text(p[3]) if len(p)>3 and p[3].strip() else "P1",
-                        "Assigned_To": "dev@team.com", "Module": "", "Actual_Result": ""
-                    })
-            st.session_state.current_df = ensure_standard_columns(pd.DataFrame(rows))
-            st.rerun()
-
-    if st.session_state.audit_report:
-        strategy_part = st.session_state.audit_report.split("[SEPARATOR]")[0]
-        strategy_part = re.split(r'\n5\.?\s*TEST_CASES', strategy_part, flags=re.IGNORECASE)[0]
-        strategy_part = "\n".join([line for line in strategy_part.split("\n") if "CASE:" not in line])
-        st.markdown(strategy_part)
-
-# --- TAB 2: EXECUTION LOG ---
-with tab2:
-    st.subheader(f"Execution Log: {st.session_state.active_id}")
-    st.session_state.current_df = st.data_editor(
-        st.session_state.current_df, use_container_width=True, hide_index=True, key="main_editor",
-        column_config={
-            "Status": st.column_config.SelectboxColumn("Status", options=["Pending", "Pass", "Fail"]),
-            "Severity": st.column_config.SelectboxColumn("Severity", options=["Blocker", "Critical", "Major", "Minor"]),
-            "Priority": st.column_config.SelectboxColumn("Priority", options=["P0", "P1", "P2", "P3"]),
-            "Evidence_Link": st.column_config.LinkColumn("Attach URL")
-        }
+    return create_client(
+        st.secrets["SUPABASE_URL"],
+        st.secrets["SUPABASE_KEY"]
     )
 
-# --- TAB 3: BUG CENTER ---
+supabase = init_connection()
+
+client = OpenAI(
+    base_url="https://api.groq.com/openai/v1",
+    api_key=st.secrets["GROQ_API_KEY"]
+)
+
+# ----------------------------------
+# SESSION DEFAULTS
+# ----------------------------------
+for key in [
+    "rewrite",
+    "feature_table",
+    "strategy",
+    "doubts",
+    "current_df"
+]:
+    if key not in st.session_state:
+        st.session_state[key] = ""
+
+if "current_df" not in st.session_state:
+    st.session_state.current_df = pd.DataFrame()
+
+# ----------------------------------
+# HELPERS
+# ----------------------------------
+
+def ensure_columns(df):
+    required = [
+        "ID", "Scenario", "Expected", "Status",
+        "Severity", "Priority", "Module",
+        "Assigned_To", "Actual_Result", "Evidence_Link"
+    ]
+    for col in required:
+        if col not in df.columns:
+            df[col] = ""
+
+    if "Status" in df.columns:
+        df["Status"] = df["Status"].replace("", "Pending")
+
+    return df
+
+def get_projects():
+    res = supabase.table("projects").select("*").execute()
+    return res.data if res.data else []
+
+def create_project(name):
+    supabase.table("projects").insert({"name": name}).execute()
+
+def get_project_id(name):
+    res = supabase.table("projects").select("id").eq("name", name).execute()
+    return res.data[0]["id"] if res.data else None
+
+def parse_strategy_output(text):
+    sections = {
+        "rewrite": "",
+        "feature_table": "",
+        "strategy": "",
+        "doubts": "",
+        "test_cases": ""
+    }
+
+    current = None
+
+    for line in text.split("\n"):
+        upper = line.upper()
+
+        if "REWRITE" in upper:
+            current = "rewrite"
+        elif "FEATURE_TABLE" in upper:
+            current = "feature_table"
+        elif "STRATEGY" in upper and "TEST_CASES" not in upper:
+            current = "strategy"
+        elif "DOUBTS" in upper:
+            current = "doubts"
+        elif "TEST_CASES" in upper:
+            current = "test_cases"
+        elif current:
+            sections[current] += line + "\n"
+
+    return sections
+
+# ----------------------------------
+# SIDEBAR - PROJECT MANAGEMENT
+# ----------------------------------
+with st.sidebar:
+    st.title("👥 Team QA Hub")
+
+    projects = get_projects()
+    project_names = [p["name"] for p in projects]
+
+    selected = st.selectbox(
+        "Switch Project",
+        options=project_names + ["+ New Project"]
+    )
+
+    if selected == "+ New Project":
+        new_name = st.text_input("New Project Name")
+        if st.button("Create Project"):
+            create_project(new_name)
+            st.success("Project Created")
+            st.rerun()
+    else:
+        st.session_state.active_project = selected
+        st.session_state.project_id = get_project_id(selected)
+
+# ----------------------------------
+# LOAD DATA WHEN PROJECT CHANGES
+# ----------------------------------
+if "active_project" in st.session_state:
+
+    pid = st.session_state.project_id
+
+    strat = supabase.table("strategies") \
+        .select("*") \
+        .eq("project_id", pid) \
+        .execute()
+
+    if strat.data:
+        data = strat.data[0]
+        st.session_state.rewrite = data.get("rewrite", "")
+        st.session_state.feature_table = data.get("feature_table", "")
+        st.session_state.strategy = data.get("strategy_text", "")
+        st.session_state.doubts = data.get("doubts", "")
+    else:
+        st.session_state.rewrite = ""
+        st.session_state.feature_table = ""
+        st.session_state.strategy = ""
+        st.session_state.doubts = ""
+
+    cases = supabase.table("test_cases") \
+        .select("*") \
+        .eq("project_id", pid) \
+        .execute()
+
+    if cases.data:
+        df = pd.DataFrame(cases.data)
+
+        df = df.rename(columns={
+            "case_id": "ID",
+            "scenario": "Scenario",
+            "expected": "Expected",
+            "status": "Status",
+            "severity": "Severity",
+            "priority": "Priority",
+            "module": "Module",
+            "assigned_to": "Assigned_To",
+            "actual_result": "Actual_Result",
+            "evidence_link": "Evidence_Link"
+        })
+
+        st.session_state.current_df = ensure_columns(df)
+    else:
+        st.session_state.current_df = ensure_columns(pd.DataFrame())
+
+# ----------------------------------
+# TABS
+# ----------------------------------
+tab1, tab2, tab3 = st.tabs([
+    "🏗️ Senior QA Audit & Strategy",
+    "✅ Execution Log",
+    "🐞 Bug Center"
+])
+
+# ----------------------------------
+# TAB 1 - STRATEGY
+# ----------------------------------
+with tab1:
+
+    st.subheader("📋 Test Strategy & Quality Gate")
+
+    prd_text = st.text_area("Paste PRD Document", height=200)
+
+    if st.button("🚀 Generate Quality Strategy"):
+
+        prompt = f"""
+        Analyze the PRD below.
+
+        1. REWRITE: Summary
+        2. FEATURE_TABLE
+        3. STRATEGY
+        4. DOUBTS
+        5. TEST_CASES (35+)
+
+        Format test cases as:
+        CASE: Scenario | Expected | Severity | Priority
+
+        PRD:
+        {prd_text}
+        """
+
+        with st.spinner("Generating..."):
+
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            result = response.choices[0].message.content
+
+            sections = parse_strategy_output(result)
+
+            st.session_state.rewrite = sections["rewrite"]
+            st.session_state.feature_table = sections["feature_table"]
+            st.session_state.strategy = sections["strategy"]
+            st.session_state.doubts = sections["doubts"]
+
+            # Parse Test Cases
+            lines = [
+                l.replace("CASE:", "").strip()
+                for l in sections["test_cases"].split("\n")
+                if "CASE:" in l
+            ]
+
+            rows = []
+
+            for i, line in enumerate(lines):
+                parts = [p.strip() for p in line.split("|")]
+
+                if len(parts) >= 2:
+                    rows.append({
+                        "ID": f"TC-{i+1}",
+                        "Scenario": parts[0],
+                        "Expected": parts[1],
+                        "Status": "Pending",
+                        "Severity": parts[2] if len(parts) > 2 else "Major",
+                        "Priority": parts[3] if len(parts) > 3 else "P1",
+                        "Module": "",
+                        "Assigned_To": "",
+                        "Actual_Result": "",
+                        "Evidence_Link": ""
+                    })
+
+            st.session_state.current_df = ensure_columns(pd.DataFrame(rows))
+
+    # Display Sections
+    st.markdown("## 1️⃣ REWRITE")
+    st.markdown(st.session_state.rewrite)
+
+    st.markdown("## 2️⃣ FEATURE TABLE")
+    st.markdown(st.session_state.feature_table)
+
+    st.markdown("## 3️⃣ STRATEGY")
+    st.markdown(st.session_state.strategy)
+
+    st.markdown("## 4️⃣ DOUBTS")
+    st.markdown(st.session_state.doubts)
+
+# ----------------------------------
+# TAB 2 - EXECUTION LOG
+# ----------------------------------
+with tab2:
+
+    st.subheader("Execution Log")
+
+    st.session_state.current_df = st.data_editor(
+        st.session_state.current_df,
+        use_container_width=True,
+        hide_index=True
+    )
+
+    if st.button("💾 Save Execution Updates"):
+
+        pid = st.session_state.project_id
+
+        supabase.table("test_cases") \
+            .delete() \
+            .eq("project_id", pid) \
+            .execute()
+
+        records = st.session_state.current_df.to_dict("records")
+
+        for r in records:
+            r["project_id"] = pid
+            r["case_id"] = r.pop("ID")
+            r["scenario"] = r.pop("Scenario")
+            r["expected"] = r.pop("Expected")
+            r["status"] = r.pop("Status")
+            r["severity"] = r.pop("Severity")
+            r["priority"] = r.pop("Priority")
+            r["module"] = r.pop("Module")
+            r["assigned_to"] = r.pop("Assigned_To")
+            r["actual_result"] = r.pop("Actual_Result")
+            r["evidence_link"] = r.pop("Evidence_Link")
+
+        supabase.table("test_cases").insert(records).execute()
+
+        st.success("Execution Log Saved")
+
+# ----------------------------------
+# TAB 3 - BUG CENTER
+# ----------------------------------
 with tab3:
+
     st.subheader("🐞 Bug Center")
-    st.session_state.current_df = ensure_standard_columns(st.session_state.current_df)
-    fails = st.session_state.current_df[st.session_state.current_df["Status"] == "Fail"]
-    
+
+    df = st.session_state.current_df
+    fails = df[df["Status"] == "Fail"]
+
     if fails.empty:
-        st.info("No bugs found.")
+        st.info("No failed test cases.")
     else:
         for idx, bug in fails.iterrows():
-            with st.expander(f"🐞 BUG: {bug['ID']} - {bug['Scenario']}", expanded=True):
-                c1, c2 = st.columns(2)
-                st.session_state.current_df.at[idx, 'Module'] = c1.text_input("Module:", value=bug['Module'], key=f"mod_{bug['ID']}")
-                st.session_state.current_df.at[idx, 'Assigned_To'] = c2.text_input("Assignee:", value=bug['Assigned_To'], key=f"asgn_{bug['ID']}")
-                st.session_state.current_df.at[idx, 'Actual_Result'] = st.text_area("Actual Result / Details:", value=bug['Actual_Result'], key=f"desc_{bug['ID']}")
-                st.markdown(f"**Expected:** {bug['Expected']}")
-                st.info(f"Priority: {bug['Priority']} | Severity: {bug['Severity']}")
+
+            with st.expander(f"{bug['ID']} - {bug['Scenario']}"):
+
+                module = st.text_input("Module", bug["Module"], key=f"mod{idx}")
+                assigned = st.text_input("Assign To", bug["Assigned_To"], key=f"as{idx}")
+                actual = st.text_area("Actual Result", bug["Actual_Result"], key=f"act{idx}")
+
+                if st.button("Save Bug", key=f"save{idx}"):
+
+                    supabase.table("bugs").insert({
+                        "project_id": st.session_state.project_id,
+                        "case_id": bug["ID"],
+                        "scenario": bug["Scenario"],
+                        "expected": bug["Expected"],
+                        "actual_result": actual,
+                        "severity": bug["Severity"],
+                        "priority": bug["Priority"],
+                        "module": module,
+                        "assigned_to": assigned
+                    }).execute()
+
+                    st.success("Bug Saved")
