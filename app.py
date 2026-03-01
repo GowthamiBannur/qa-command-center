@@ -1,298 +1,194 @@
 import streamlit as st
 import pandas as pd
+import os
 import re
-from supabase import create_client
 from openai import OpenAI
 
-# --------------------------------------------------
+# =========================
 # CONFIG
-# --------------------------------------------------
-st.set_page_config(page_title="Senior QA Command Center", layout="wide")
+# =========================
+st.set_page_config(page_title="QA Command Center", layout="wide")
 
-# --------------------------------------------------
-# CONNECTIONS
-# --------------------------------------------------
-@st.cache_resource
-def init_supabase():
-    return create_client(
-        st.secrets["SUPABASE_URL"],
-        st.secrets["SUPABASE_KEY"]
-    )
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-@st.cache_resource
-def init_ai():
-    return OpenAI(
-        base_url="https://api.groq.com/openai/v1",
-        api_key=st.secrets["GROQ_API_KEY"]
-    )
+TESTCASE_FILE = "testcases.csv"
+BUG_FILE = "bugs.csv"
 
-supabase = init_supabase()
-client = init_ai()
-
-# --------------------------------------------------
-# DATABASE HELPERS
-# --------------------------------------------------
-def get_projects():
-    return supabase.table("projects").select("*").execute().data or []
-
-def create_project(name):
-    supabase.table("projects").insert({"name": name}).execute()
-
-def get_project_id(name):
-    res = supabase.table("projects").select("id").eq("name", name).execute()
-    return res.data[0]["id"]
-
-def save_strategy(pid, content):
-    supabase.table("strategies").upsert({
-        "project_id": pid,
-        "rewrite": content
-    }).execute()
-
-def load_strategy(pid):
-    res = supabase.table("strategies").select("*").eq("project_id", pid).execute()
-    return res.data[0] if res.data else None
-
-def load_testcases(pid):
-    res = supabase.table("test_cases").select("*").eq("project_id", pid).execute()
-    return pd.DataFrame(res.data) if res.data else pd.DataFrame()
-
-def save_testcases(df):
-    if not df.empty:
-        supabase.table("test_cases").upsert(df.to_dict("records")).execute()
-
-def bug_exists(test_case_id):
-    res = supabase.table("bugs").select("id").eq("test_case_id", test_case_id).execute()
-    return bool(res.data)
-
-def create_bug(row):
-    supabase.table("bugs").insert({
-        "test_case_id": row["id"],
-        "title": f"Bug: {row['scenario']}",
-        "description": f"Expected:\n{row['expected']}\n\nActual:\n{row.get('actual_result','')}",
-        "status": "Open"
-    }).execute()
-
-def load_bugs_for_project(pid):
-    res = supabase.table("bugs") \
-        .select("*, test_cases!inner(project_id, scenario, assigned_to, severity, priority)") \
-        .eq("test_cases.project_id", pid) \
-        .execute()
-    return res.data or []
-
-# --------------------------------------------------
-# SIDEBAR
-# --------------------------------------------------
-with st.sidebar:
-    st.title("Projects")
-
-    projects = get_projects()
-    names = [p["name"] for p in projects]
-
-    selected = st.selectbox("Select Project", names + ["+ New Project"])
-
-    if selected == "+ New Project":
-        new_name = st.text_input("New Project Name")
-        if st.button("Create"):
-            create_project(new_name)
-            st.rerun()
+# =========================
+# UTIL FUNCTIONS
+# =========================
+def load_csv(file, columns):
+    if os.path.exists(file):
+        return pd.read_csv(file)
     else:
-        pid = get_project_id(selected)
-        st.session_state.project_id = pid
+        return pd.DataFrame(columns=columns)
 
-if "project_id" not in st.session_state:
-    st.info("Create or select a project.")
-    st.stop()
+def save_csv(df, file):
+    df.to_csv(file, index=False)
 
-pid = st.session_state.project_id
+def clean_text(text):
+    text = re.sub(r"^\d+\.\s*", "", text)
+    text = re.sub(r"^(scenario|expected|expected result|severity|priority|module)\s*:\s*", "", text, flags=re.IGNORECASE)
+    return text.strip()
 
-# --------------------------------------------------
-# TABS
-# --------------------------------------------------
-tab1, tab2, tab3 = st.tabs([
-    "Senior QA Audit & Strategy",
-    "Execution Log",
-    "Bug Center"
-])
+# =========================
+# LOAD DATA
+# =========================
+testcase_columns = ["project_id","case_id","scenario","expected","severity","priority","module","status"]
+bug_columns = ["bug_id","project_id","case_id","bug_title","severity","status"]
 
-# --------------------------------------------------
-# TAB 1 – AUDIT
-# --------------------------------------------------
+tc_df = load_csv(TESTCASE_FILE, testcase_columns)
+bug_df = load_csv(BUG_FILE, bug_columns)
+
+# =========================
+# UI TABS
+# =========================
+tab1, tab2, tab3 = st.tabs(["Generate Testcases", "Execution Log", "Bug Centre"])
+
+# =========================================================
+# TAB 1 — GENERATE TESTCASES
+# =========================================================
 with tab1:
-    st.subheader("Senior QA Audit & Strategy")
 
-    prd = st.text_area("Paste PRD", height=250)
+    st.header("Generate AI Test Cases")
 
-    if st.button("Generate Audit Strategy"):
-        prompt = f"""
-You are a Senior QA Architect.
+    project_id = st.text_input("Project ID")
 
-Generate:
-1. REWRITE
-2. FEATURE TABLE
-3. STRATEGY
-4. DOUBTS
+    feature_input = st.text_area("Enter Feature / PRD")
 
-Do NOT generate test cases.
-
-PRD:
-{prd}
-"""
-
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}]
-        )
-
-        result = response.choices[0].message.content
-        save_strategy(pid, result)
-        st.success("Audit Strategy Saved")
-
-    strategy = load_strategy(pid)
-    if strategy:
-        st.markdown(strategy["rewrite"])
-
-# --------------------------------------------------
-# TAB 2 – EXECUTION LOG
-# --------------------------------------------------
-with tab2:
-    st.subheader("Execution Log")
-
-    # ---------- Generate Test Cases ----------
     if st.button("Generate Test Cases"):
 
-        strategy = load_strategy(pid)
-
-        if not strategy:
-            st.warning("Generate Audit Strategy first.")
+        if not project_id or not feature_input:
+            st.warning("Please enter Project ID and Feature.")
         else:
-            prompt = """
-Generate 15 professional test cases.
 
-Return ONLY pipe separated values.
+            with st.spinner("Generating test cases..."):
 
-Format strictly:
+                # Delete old test cases for this project (CLEAN MODE)
+                global tc_df
+                tc_df = tc_df[tc_df["project_id"] != project_id]
+
+                prompt = f"""
+You are a senior QA architect.
+
+Generate 15 structured test cases.
+
+Return STRICTLY in this format:
 Scenario | Expected Result | Severity | Priority | Module
+
+No numbering.
+No prefixes.
+No explanations.
+
+Feature:
+{feature_input}
 """
 
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}]
-            )
-
-            raw_text = response.choices[0].message.content.strip()
-
-            rows = []
-            tc_counter = 1
-
-            for line in raw_text.split("\n"):
-                if "|" not in line:
-                    continue
-
-                parts = [p.strip() for p in line.split("|")]
-                if len(parts) != 5:
-                    continue
-
-                def clean(text):
-                    text = re.sub(r"^\d+\.\s*", "", text)
-                    text = re.sub(r"^(scenario|expected|expected result|severity|priority|module)\s*:\s*", "", text, flags=re.IGNORECASE)
-                    return text.strip()
-
-                scenario = clean(parts[0])
-                expected = clean(parts[1])
-                severity = clean(parts[2])
-                priority = clean(parts[3])
-                module = clean(parts[4])
-
-                rows.append({
-                    "project_id": pid,
-                    "case_id": f"TC_{tc_counter:03}",
-                    "scenario": scenario,
-                    "expected": expected,
-                    "severity": severity,
-                    "priority": priority,
-                    "module": module,
-                    "status": "Pending"
-                })
-
-                tc_counter += 1
-
-            if rows:
-                supabase.table("test_cases").insert(rows).execute()
-                st.success(f"{len(rows)} Test Cases Generated")
-                st.rerun()
-
-    # ---------- Load & Execute ----------
-    df = load_testcases(pid)
-
-    if df.empty:
-        st.info("No test cases found.")
-    else:
-        df_display = df.drop(columns=["id", "project_id", "created_at"], errors="ignore")
-
-        edited_df = st.data_editor(
-            df_display,
-            column_config={
-                "status": st.column_config.SelectboxColumn(
-                    "Status",
-                    options=["Pending", "Pass", "Fail"]
+                response = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0.3
                 )
-            },
-            use_container_width=True
-        )
+
+                output = response.choices[0].message.content.strip()
+                lines = output.split("\n")
+
+                rows = []
+                tc_counter = 1
+
+                for line in lines:
+
+                    if "|" not in line:
+                        continue
+
+                    parts = [clean_text(p) for p in line.split("|")]
+
+                    if len(parts) != 5:
+                        continue
+
+                    scenario, expected, severity, priority, module = parts
+
+                    rows.append({
+                        "project_id": project_id,
+                        "case_id": f"TC_{tc_counter:03}",
+                        "scenario": scenario,
+                        "expected": expected,
+                        "severity": severity,
+                        "priority": priority,
+                        "module": module,
+                        "status": "Pending"
+                    })
+
+                    tc_counter += 1
+
+                new_df = pd.DataFrame(rows, columns=testcase_columns)
+
+                tc_df = pd.concat([tc_df, new_df], ignore_index=True)
+
+                save_csv(tc_df, TESTCASE_FILE)
+
+                st.success("Test cases generated successfully.")
+
+# =========================================================
+# TAB 2 — EXECUTION LOG
+# =========================================================
+with tab2:
+
+    st.header("Execution Log")
+
+    if tc_df.empty:
+        st.info("No test cases available.")
+    else:
+
+        edited_df = st.data_editor(tc_df, use_container_width=True)
 
         if st.button("Save Execution Updates"):
+            save_csv(edited_df, TESTCASE_FILE)
+            st.success("Execution log updated.")
 
-            edited_df["id"] = df["id"]
-            edited_df["project_id"] = df["project_id"]
-
-            save_testcases(edited_df)
-
-            for _, row in edited_df.iterrows():
-                if row["status"] == "Fail":
-                    if not bug_exists(row["id"]):
-                        create_bug(row)
-
-            st.success("Execution Updated")
-            st.rerun()
-
-# --------------------------------------------------
-# TAB 3 – BUG CENTER
-# --------------------------------------------------
+# =========================================================
+# TAB 3 — BUG CENTRE
+# =========================================================
 with tab3:
-    st.subheader("Bug Center")
 
-    bugs = load_bugs_for_project(pid)
+    st.header("Bug Centre")
 
-    if not bugs:
-        st.info("No Bugs Reported.")
+    if tc_df.empty:
+        st.info("Generate test cases first.")
     else:
-        for bug in bugs:
-            with st.expander(f"{bug['title']}"):
 
-                st.write("Scenario:", bug["test_cases"]["scenario"])
-                st.write("Severity:", bug["test_cases"]["severity"])
-                st.write("Priority:", bug["test_cases"]["priority"])
-                st.write("Assigned To:", bug["test_cases"]["assigned_to"])
+        project_filter = st.selectbox("Select Project", tc_df["project_id"].unique())
 
-                new_status = st.selectbox(
-                    "Status",
-                    ["Open", "In Progress", "Fixed", "Closed"],
-                    index=["Open", "In Progress", "Fixed", "Closed"].index(bug["status"]),
-                    key=f"status_{bug['id']}"
-                )
+        project_cases = tc_df[tc_df["project_id"] == project_filter]
 
-                detailed_desc = st.text_area(
-                    "Detailed Description / Steps to Reproduce",
-                    value=bug["description"],
-                    height=150,
-                    key=f"desc_{bug['id']}"
-                )
+        case_select = st.selectbox("Select Test Case", project_cases["case_id"])
 
-                if st.button("Update Bug", key=f"btn_{bug['id']}"):
-                    supabase.table("bugs").update({
-                        "status": new_status,
-                        "description": detailed_desc
-                    }).eq("id", bug["id"]).execute()
+        bug_title = st.text_input("Bug Title")
+        bug_severity = st.selectbox("Severity", ["Low", "Medium", "High", "Critical"])
+        bug_status = st.selectbox("Status", ["Open", "In Progress", "Closed"])
 
-                    st.success("Bug Updated")
-                    st.rerun()
+        if st.button("Report Bug"):
+
+            if not bug_title:
+                st.warning("Enter bug title.")
+            else:
+
+                bug_id = f"BUG_{len(bug_df)+1:03}"
+
+                new_bug = pd.DataFrame([{
+                    "bug_id": bug_id,
+                    "project_id": project_filter,
+                    "case_id": case_select,
+                    "bug_title": bug_title,
+                    "severity": bug_severity,
+                    "status": bug_status
+                }])
+
+                bug_df = pd.concat([bug_df, new_bug], ignore_index=True)
+
+                save_csv(bug_df, BUG_FILE)
+
+                st.success("Bug reported successfully.")
+
+        st.subheader("Logged Bugs")
+        st.dataframe(bug_df)
