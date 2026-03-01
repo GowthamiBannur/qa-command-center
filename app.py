@@ -154,16 +154,21 @@ with tab1:
 # --------------------------------------------------
 # TAB 2 – EXECUTION LOG
 # --------------------------------------------------
+# --------------------------------------------------
+# TAB 2 – EXECUTION LOG
+# --------------------------------------------------
 with tab2:
     st.subheader("Execution Log")
 
-   # Generate Test Cases
-import re
-import pandas as pd
+    # ---------- Generate Test Cases Button ----------
+    if st.button("Generate Test Cases"):
 
-def generate_testcases(client, feature_text):
+        strategy = load_strategy(pid)
 
-    prompt = f"""
+        if not strategy:
+            st.warning("Generate Audit Strategy first.")
+        else:
+            prompt = f"""
 You are a Senior QA Architect.
 
 Generate 15 professional test cases.
@@ -173,71 +178,56 @@ STRICT RULES:
 - DO NOT add numbering.
 - DO NOT add words like case_id:, scenario:, expected:
 - DO NOT repeat column names.
-- Format strictly:
 
+FORMAT:
 Scenario | Expected Result | Severity | Priority | Module
-
-Example:
-User is in abandoned checkout with subtotal ₹1999 | Small jewelry box is offered | High | High | Eligibility Determination
 """
 
-    response = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=[{"role": "user", "content": prompt}]
-    )
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}]
+            )
 
-    raw_text = response.choices[0].message.content.strip()
+            raw_text = response.choices[0].message.content.strip()
 
-    rows = []
-    lines = raw_text.split("\n")
+            rows = []
+            lines = raw_text.split("\n")
+            tc_counter = 1
 
-    tc_counter = 1
+            for line in lines:
+                if "|" not in line:
+                    continue
 
-    for line in lines:
-        line = line.strip()
+                parts = [p.strip() for p in line.split("|")]
 
-        if "|" not in line:
-            continue
+                if len(parts) != 5:
+                    continue
 
-        parts = [p.strip() for p in line.split("|")]
+                rows.append({
+                    "project_id": pid,
+                    "case_id": f"TC_{tc_counter:03}",
+                    "scenario": parts[0],
+                    "expected": parts[1],
+                    "severity": parts[2],
+                    "priority": parts[3],
+                    "module": parts[4],
+                    "status": "Pending"
+                })
 
-        if len(parts) != 5:
-            continue
+                tc_counter += 1
 
-        case_id = f"TC_{tc_counter:03}"
+            if rows:
+                supabase.table("test_cases").insert(rows).execute()
+                st.success(f"{len(rows)} Test Cases Generated")
+                st.rerun()
 
-        rows.append([
-            case_id,
-            parts[0],  # Scenario
-            parts[1],  # Expected
-            parts[2],  # Severity
-            parts[3],  # Priority
-            parts[4]   # Module
-        ])
-
-        tc_counter += 1
-
-    df = pd.DataFrame(rows, columns=[
-        "Case ID",
-        "Scenario",
-        "Expected Result",
-        "Status",
-        "Severity",
-        "Priority",
-        "Module"
-    ])
-
-    df["Status"] = "Fail"
-
-    return df
-    # Load Test Cases
+    # ---------- Load Test Cases ----------
     df = load_testcases(pid)
 
     if df.empty:
         st.info("No test cases found.")
     else:
-        df_display = df.copy()
-        df_display = df_display.drop(columns=["id", "project_id", "created_at"], errors="ignore")
+        df_display = df.drop(columns=["id", "project_id", "created_at"], errors="ignore")
 
         edited_df = st.data_editor(
             df_display,
@@ -251,6 +241,7 @@ User is in abandoned checkout with subtotal ₹1999 | Small jewelry box is offer
         )
 
         if st.button("Save Execution Updates"):
+
             edited_df["id"] = df["id"]
             edited_df["project_id"] = df["project_id"]
 
