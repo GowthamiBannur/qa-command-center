@@ -9,7 +9,17 @@ from openai import OpenAI
 # =========================
 st.set_page_config(page_title="QA Command Center", layout="wide")
 
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+# =========================
+# SAFE API CLIENT SETUP
+# =========================
+if "GROQ_API_KEY" not in st.secrets or not st.secrets["GROQ_API_KEY"]:
+    st.error("GROQ_API_KEY not found in Streamlit Secrets.")
+    st.stop()
+
+client = OpenAI(
+    api_key=st.secrets["GROQ_API_KEY"],
+    base_url="https://api.groq.com/openai/v1",
+)
 
 TESTCASE_FILE = "testcases.csv"
 BUG_FILE = "bugs.csv"
@@ -87,12 +97,9 @@ with tab1:
 
             with st.spinner("Generating test cases..."):
 
-                # CLEAN MODE: delete old test cases of this project
                 tc_df = tc_df[tc_df["project_id"] != project_id]
 
                 prompt = f"""
-You are a senior QA architect.
-
 Generate 15 structured test cases.
 
 Return STRICTLY in this format:
@@ -107,7 +114,7 @@ Feature:
 """
 
                 response = client.chat.completions.create(
-                    model="gpt-4o-mini",
+                    model="llama3-70b-8192",
                     messages=[
                         {"role": "user", "content": prompt}
                     ],
