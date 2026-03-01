@@ -1,24 +1,32 @@
 import streamlit as st
 import pandas as pd
 from supabase import create_client
-from datetime import datetime
+from openai import OpenAI
 
 # --------------------------------------------------
 # CONFIG
 # --------------------------------------------------
-st.set_page_config(page_title="Senior QA Operating System", layout="wide")
+st.set_page_config(page_title="Senior QA Command Center", layout="wide")
 
 # --------------------------------------------------
-# SUPABASE INIT
+# INIT CONNECTIONS
 # --------------------------------------------------
 @st.cache_resource
-def init_connection():
+def init_supabase():
     return create_client(
         st.secrets["SUPABASE_URL"],
         st.secrets["SUPABASE_KEY"]
     )
 
-supabase = init_connection()
+@st.cache_resource
+def init_groq():
+    return OpenAI(
+        base_url="https://api.groq.com/openai/v1",
+        api_key=st.secrets["GROQ_API_KEY"]
+    )
+
+supabase = init_supabase()
+client = init_groq()
 
 # --------------------------------------------------
 # HELPERS
@@ -33,7 +41,7 @@ def get_project_id(name):
     res = supabase.table("projects").select("id").eq("name", name).execute()
     return res.data[0]["id"]
 
-def save_audit(pid, rewrite, feature_table, strategy, doubts):
+def save_strategy(pid, rewrite, feature_table, strategy, doubts):
     supabase.table("strategies").upsert({
         "project_id": pid,
         "rewrite": rewrite,
@@ -42,7 +50,7 @@ def save_audit(pid, rewrite, feature_table, strategy, doubts):
         "doubts": doubts
     }).execute()
 
-def load_audit(pid):
+def load_strategy(pid):
     res = supabase.table("strategies").select("*").eq("project_id", pid).execute()
     return res.data[0] if res.data else None
 
@@ -50,33 +58,27 @@ def load_testcases(pid):
     res = supabase.table("test_cases").select("*").eq("project_id", pid).execute()
     return pd.DataFrame(res.data) if res.data else pd.DataFrame()
 
-def save_testcases(pid, df):
-    supabase.table("test_cases").delete().eq("project_id", pid).execute()
+def save_testcases(df):
+    if not df.empty:
+        supabase.table("test_cases").upsert(df.to_dict("records")).execute()
 
-    records = df.to_dict("records")
-    for r in records:
-        r["project_id"] = pid
-    if records:
-        supabase.table("test_cases").insert(records).execute()
-
-def bug_exists(pid, case_id):
-    res = supabase.table("bugs").select("id").eq("project_id", pid).eq("case_id", case_id).execute()
+def bug_exists(test_case_id):
+    res = supabase.table("bugs").select("id").eq("test_case_id", test_case_id).execute()
     return bool(res.data)
 
-def create_bug(pid, row):
+def create_bug(row):
     supabase.table("bugs").insert({
-        "project_id": pid,
-        "case_id": row["case_id"],
+        "test_case_id": row["id"],
         "title": f"Bug from: {row['scenario']}",
-        "description": f"Auto-generated from failed test case.\n\nExpected:\n{row['expected']}",
-        "assigned_to": row["assigned_to"],
-        "severity": row["severity"],
-        "priority": row["priority"],
-        "created_at": datetime.now().isoformat()
+        "description": f"Expected:\n{row['expected']}\n\nActual:\n{row.get('actual_result','')}",
+        "status": "Open"
     }).execute()
 
-def load_bugs(pid):
-    res = supabase.table("bugs").select("*").eq("project_id", pid).execute()
+def load_bugs_for_project(pid):
+    res = supabase.table("bugs") \
+        .select("*, test_cases!inner(project_id, scenario, assigned_to, severity, priority)") \
+        .eq("test_cases.project_id", pid) \
+        .execute()
     return res.data or []
 
 # --------------------------------------------------
@@ -92,22 +94,22 @@ with st.sidebar:
 
     if selected == "+ New Project":
         new_name = st.text_input("New Project Name")
-        if st.button("Create"):
+        if st.button("Create Project"):
             create_project(new_name)
             st.rerun()
     else:
         pid = get_project_id(selected)
         st.session_state.project_id = pid
 
-# --------------------------------------------------
-# MAIN
-# --------------------------------------------------
 if "project_id" not in st.session_state:
-    st.info("Create or Select a project to begin.")
+    st.info("Create or select a project.")
     st.stop()
 
 pid = st.session_state.project_id
 
+# --------------------------------------------------
+# TABS
+# --------------------------------------------------
 tab1, tab2, tab3 = st.tabs([
     "🏗️ Senior QA Audit & Strategy",
     "✅ Execution Log",
@@ -115,24 +117,45 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # --------------------------------------------------
-# TAB 1 - AUDIT (NO TEST CASE DISPLAY HERE)
+# TAB 1 – AUDIT (NO TEST CASE DISPLAY)
 # --------------------------------------------------
 with tab1:
     st.subheader("Senior QA Audit & Strategy")
 
-    audit = load_audit(pid)
+    prd = st.text_area("Paste PRD", height=200)
 
-    rewrite = st.text_area("1️⃣ REWRITE", audit["rewrite"] if audit else "", height=150)
-    feature_table = st.text_area("2️⃣ FEATURE TABLE", audit["feature_table"] if audit else "", height=150)
-    strategy = st.text_area("3️⃣ STRATEGY", audit["strategy_text"] if audit else "", height=150)
-    doubts = st.text_area("4️⃣ DOUBTS", audit["doubts"] if audit else "", height=150)
+    if st.button("Generate Strategy"):
+        prompt = f"""
+        Analyze the PRD and generate:
 
-    if st.button("💾 Save Audit"):
-        save_audit(pid, rewrite, feature_table, strategy, doubts)
-        st.success("Saved Successfully")
+        1. REWRITE
+        2. FEATURE TABLE
+        3. STRATEGY
+        4. DOUBTS
+
+        Do NOT generate test cases.
+
+        PRD:
+        {prd}
+        """
+
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
+
+        result = response.choices[0].message.content
+
+        save_strategy(pid, result, "", "", "")
+        st.success("Generated & Saved")
+
+    strategy = load_strategy(pid)
+
+    if strategy:
+        st.markdown(strategy["rewrite"])
 
 # --------------------------------------------------
-# TAB 2 - EXECUTION LOG WITH DROPDOWN
+# TAB 2 – EXECUTION LOG
 # --------------------------------------------------
 with tab2:
     st.subheader("Execution Log")
@@ -140,10 +163,9 @@ with tab2:
     df = load_testcases(pid)
 
     if df.empty:
-        st.info("No test cases available.")
+        st.info("No test cases found.")
     else:
         df["status"] = df["status"].fillna("Pending")
-        df["assigned_to"] = df["assigned_to"].fillna("")
 
         edited_df = st.data_editor(
             df,
@@ -156,37 +178,35 @@ with tab2:
             use_container_width=True
         )
 
-        if st.button("💾 Save Execution Updates"):
-            save_testcases(pid, edited_df)
+        if st.button("Save Execution Updates"):
+            save_testcases(edited_df)
 
-            # Auto bug generation for failed cases
             for _, row in edited_df.iterrows():
                 if row["status"] == "Fail":
-                    if not bug_exists(pid, row["case_id"]):
-                        create_bug(pid, row)
+                    if not bug_exists(row["id"]):
+                        create_bug(row)
 
-            st.success("Execution Log Updated")
+            st.success("Execution Updated")
             st.rerun()
 
 # --------------------------------------------------
-# TAB 3 - BUG CENTER
+# TAB 3 – BUG CENTER
 # --------------------------------------------------
 with tab3:
     st.subheader("Bug Center")
 
-    bugs = load_bugs(pid)
+    bugs = load_bugs_for_project(pid)
 
     if not bugs:
         st.info("No Bugs Yet.")
     else:
         for bug in bugs:
             with st.expander(bug["title"]):
-                st.write(f"**Assigned To:** {bug['assigned_to']}")
-                st.write(f"**Severity:** {bug['severity']}")
-                st.write(f"**Priority:** {bug['priority']}")
-                st.write(f"**Created At:** {bug['created_at']}")
-                st.text_area(
-                    "Description",
-                    bug["description"],
-                    key=f"bug_{bug['id']}"
-                )
+                st.write("**Scenario:**", bug["test_cases"]["scenario"])
+                st.write("**Assigned To:**", bug["test_cases"]["assigned_to"])
+                st.write("**Severity:**", bug["test_cases"]["severity"])
+                st.write("**Priority:**", bug["test_cases"]["priority"])
+                st.write("**Status:**", bug["status"])
+                st.write("**Created At:**", bug["created_at"])
+                st.write("**Description:**")
+                st.write(bug["description"])
