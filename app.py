@@ -144,22 +144,20 @@ with tab1:
         )
 
         result = response.choices[0].message.content
-
         save_strategy(pid, result)
         st.success("Audit Strategy Saved")
 
     strategy = load_strategy(pid)
-
     if strategy:
         st.markdown(strategy["rewrite"])
 
 # --------------------------------------------------
-# TAB 2 – EXECUTION LOG (TEST CASES LIVE HERE)
+# TAB 2 – EXECUTION LOG
 # --------------------------------------------------
 with tab2:
     st.subheader("Execution Log")
 
-    # -------- Generate Test Cases --------
+    # Generate Test Cases
     if st.button("Generate Test Cases"):
         strategy = load_strategy(pid)
 
@@ -167,12 +165,12 @@ with tab2:
             st.warning("Generate Audit Strategy first.")
         else:
             prompt = f"""
-            Generate structured test cases based on this QA strategy.
+            Generate structured test cases.
 
-            Format strictly:
+            Strict format:
             case_id | scenario | expected | severity | priority | module
 
-            Strategy:
+            Based on:
             {strategy['rewrite']}
             """
 
@@ -190,9 +188,9 @@ with tab2:
                     if len(parts) >= 6:
                         rows.append({
                             "project_id": pid,
-                            "case_id": parts[0],
-                            "scenario": parts[1],
-                            "expected": parts[2],
+                            "case_id": parts[0].replace("case_id:", "").strip(),
+                            "scenario": parts[1].replace("scenario:", "").strip(),
+                            "expected": parts[2].replace("expected:", "").strip(),
                             "severity": parts[3],
                             "priority": parts[4],
                             "module": parts[5],
@@ -203,14 +201,17 @@ with tab2:
                 supabase.table("test_cases").insert(rows).execute()
                 st.success(f"{len(rows)} Test Cases Generated")
 
-    # -------- Load & Execute --------
+    # Load Test Cases
     df = load_testcases(pid)
 
     if df.empty:
         st.info("No test cases found.")
     else:
+        df_display = df.copy()
+        df_display = df_display.drop(columns=["id", "project_id", "created_at"], errors="ignore")
+
         edited_df = st.data_editor(
-            df,
+            df_display,
             column_config={
                 "status": st.column_config.SelectboxColumn(
                     "Status",
@@ -221,6 +222,9 @@ with tab2:
         )
 
         if st.button("Save Execution Updates"):
+            edited_df["id"] = df["id"]
+            edited_df["project_id"] = df["project_id"]
+
             save_testcases(edited_df)
 
             for _, row in edited_df.iterrows():
@@ -232,7 +236,7 @@ with tab2:
             st.rerun()
 
 # --------------------------------------------------
-# TAB 3 – BUG CENTER
+# TAB 3 – BUG CENTER (Editable)
 # --------------------------------------------------
 with tab3:
     st.subheader("Bug Center")
@@ -243,12 +247,32 @@ with tab3:
         st.info("No Bugs Reported.")
     else:
         for bug in bugs:
-            with st.expander(bug["title"]):
+            with st.expander(f"{bug['title']}"):
+
                 st.write("Scenario:", bug["test_cases"]["scenario"])
-                st.write("Assigned To:", bug["test_cases"]["assigned_to"])
                 st.write("Severity:", bug["test_cases"]["severity"])
                 st.write("Priority:", bug["test_cases"]["priority"])
-                st.write("Status:", bug["status"])
-                st.write("Created At:", bug["created_at"])
-                st.write("Description:")
-                st.write(bug["description"])
+                st.write("Assigned To:", bug["test_cases"]["assigned_to"])
+
+                new_status = st.selectbox(
+                    "Status",
+                    ["Open", "In Progress", "Fixed", "Closed"],
+                    index=["Open", "In Progress", "Fixed", "Closed"].index(bug["status"]),
+                    key=f"status_{bug['id']}"
+                )
+
+                detailed_desc = st.text_area(
+                    "Detailed Description / Steps to Reproduce",
+                    value=bug["description"],
+                    height=150,
+                    key=f"desc_{bug['id']}"
+                )
+
+                if st.button("Update Bug", key=f"btn_{bug['id']}"):
+                    supabase.table("bugs").update({
+                        "status": new_status,
+                        "description": detailed_desc
+                    }).eq("id", bug["id"]).execute()
+
+                    st.success("Bug Updated")
+                    st.rerun()
