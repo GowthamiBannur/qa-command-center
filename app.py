@@ -164,15 +164,24 @@ with tab2:
         if not strategy:
             st.warning("Generate Audit Strategy first.")
         else:
-            prompt = f"""
-            Generate structured test cases.
+           prompt = f"""
+Generate structured test cases.
 
-            Strict format:
-            case_id | scenario | expected | severity | priority | module
+STRICT RULES:
+- DO NOT number rows
+- DO NOT write labels like case_id:, scenario:, expected:
+- DO NOT add explanations
+- Output ONLY raw rows
 
-            Based on:
-            {strategy['rewrite']}
-            """
+FORMAT EXACTLY:
+TC_001 | Scenario text | Expected result text | High | High | Module Name
+
+Columns order:
+case_id | scenario | expected | severity | priority | module
+
+Based on:
+{strategy['rewrite']}
+"""
 
             response = client.chat.completions.create(
                 model="llama-3.3-70b-versatile",
