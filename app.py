@@ -157,14 +157,14 @@ with tab1:
 with tab2:
     st.subheader("Execution Log")
 
-    # Generate Test Cases
-    if st.button("Generate Test Cases"):
-        strategy = load_strategy(pid)
+   # Generate Test Cases
+if st.button("Generate Test Cases"):
+    strategy = load_strategy(pid)
 
-        if not strategy:
-            st.warning("Generate Audit Strategy first.")
-        else:
-           prompt = f"""
+    if not strategy:
+        st.warning("Generate Audit Strategy first.")
+    else:
+        prompt = f"""
 Generate structured test cases.
 
 STRICT RULES:
@@ -183,32 +183,31 @@ Based on:
 {strategy['rewrite']}
 """
 
-            response = client.chat.completions.create(
-                model="llama-3.3-70b-versatile",
-                messages=[{"role": "user", "content": prompt}]
-            )
+        response = client.chat.completions.create(
+            model="llama-3.3-70b-versatile",
+            messages=[{"role": "user", "content": prompt}]
+        )
 
-            result = response.choices[0].message.content
+        result = response.choices[0].message.content
 
-            rows = []
-            for line in result.split("\n"):
-                if "|" in line:
-                    parts = [p.strip() for p in line.split("|")]
-                    if len(parts) >= 6:
-                        rows.append({
-                            "project_id": pid,
-                            "case_id": parts[0].replace("case_id:", "").strip(),
-                            "scenario": parts[1].replace("scenario:", "").strip(),
-                            "expected": parts[2].replace("expected:", "").strip(),
-                            "severity": parts[3],
-                            "priority": parts[4],
-                            "module": parts[5],
-                            "status": "Pending"
-                        })
+        rows = []
+        for line in result.split("\n"):
+            if line.count("|") == 5:
+                parts = [p.strip() for p in line.split("|")]
+                rows.append({
+                    "project_id": pid,
+                    "case_id": parts[0],
+                    "scenario": parts[1],
+                    "expected": parts[2],
+                    "severity": parts[3],
+                    "priority": parts[4],
+                    "module": parts[5],
+                    "status": "Pending"
+                })
 
-            if rows:
-                supabase.table("test_cases").insert(rows).execute()
-                st.success(f"{len(rows)} Test Cases Generated")
+        if rows:
+            supabase.table("test_cases").insert(rows).execute()
+            st.success(f"{len(rows)} Test Cases Generated")
 
     # Load Test Cases
     df = load_testcases(pid)
