@@ -68,19 +68,25 @@ with st.sidebar:
     else:
         st.session_state.active_id = current_proj
 
-    # --- UPDATED SYNC LOGIC: Saves Tab 1 Text Too ---
+    # --- UPDATED SYNC LOGIC: Saves Tab 1 even if Tab 2 is empty ---
     if st.button("🌊 Sync Full Project (All Tabs)", use_container_width=True):
         # 1. Clear old data for this project
         supabase.table("qa_tracker").delete().eq("project_name", st.session_state.active_id).execute()
         
-        # 2. Prepare data with the audit_report included in every row (simplest way to sync text state)
+        # 2. Get the current table data
         data = st.session_state.current_df.to_dict(orient='records')
+        
+        # 3. FIX: If the table is empty, create one metadata row so the Strategy text can be saved
+        if not data:
+            data = [{"ID": "META", "Scenario": "Strategy Backup", "Status": "System"}]
+        
+        # 4. Prepare data with the audit_report included
         for row in data: 
             row['project_name'] = st.session_state.active_id
-            row['strategy_text'] = st.session_state.audit_report # Save Tab 1 content
+            row['strategy_text'] = st.session_state.audit_report 
             
         supabase.table("qa_tracker").insert(data).execute()
-        st.success(f"Saved Strategy + {len(data)} Cases!")
+        st.success(f"Successfully Synced '{st.session_state.active_id}' Strategy + {len(data)} Rows!")
 
 # 6. Data Loading (Restores Tab 1 + Tab 2 + Tab 3)
 if st.session_state.get('last_project') != st.session_state.active_id:
