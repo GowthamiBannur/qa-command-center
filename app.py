@@ -1,11 +1,10 @@
 import streamlit as st
 import sqlite3
-import json
 from datetime import datetime
 
-# ---------------- DB SETUP ---------------- #
+# ---------------- DATABASE ---------------- #
 
-conn = sqlite3.connect("qa_tool.db", check_same_thread=False)
+conn = sqlite3.connect("qa_system.db", check_same_thread=False)
 cursor = conn.cursor()
 
 cursor.execute("""
@@ -17,25 +16,23 @@ CREATE TABLE IF NOT EXISTS projects (
 
 cursor.execute("""
 CREATE TABLE IF NOT EXISTS audit (
-    project_id INTEGER,
+    project_id INTEGER PRIMARY KEY,
     rewrite TEXT,
     feature_table TEXT,
     strategy TEXT,
-    doubts TEXT,
-    FOREIGN KEY(project_id) REFERENCES projects(id)
+    doubts TEXT
 )
 """)
 
 cursor.execute("""
-CREATE TABLE IF NOT EXISTS test_cases (
+CREATE TABLE IF NOT EXISTS testcases (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER,
     title TEXT,
     steps TEXT,
     expected TEXT,
     assigned_to TEXT,
-    status TEXT DEFAULT 'Pending',
-    FOREIGN KEY(project_id) REFERENCES projects(id)
+    status TEXT DEFAULT 'Pending'
 )
 """)
 
@@ -43,12 +40,11 @@ cursor.execute("""
 CREATE TABLE IF NOT EXISTS bugs (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     project_id INTEGER,
-    test_case_id INTEGER,
+    testcase_id INTEGER,
     title TEXT,
     description TEXT,
     assigned_to TEXT,
-    created_at TEXT,
-    FOREIGN KEY(project_id) REFERENCES projects(id)
+    created_at TEXT
 )
 """)
 
@@ -65,31 +61,43 @@ def get_audit(project_id):
     return cursor.fetchone()
 
 def save_audit(project_id, rewrite, feature_table, strategy, doubts):
-    cursor.execute("DELETE FROM audit WHERE project_id=?", (project_id,))
-    cursor.execute("INSERT INTO audit VALUES (?, ?, ?, ?, ?)", 
-                   (project_id, rewrite, feature_table, strategy, doubts))
+    cursor.execute("""
+    INSERT OR REPLACE INTO audit (project_id, rewrite, feature_table, strategy, doubts)
+    VALUES (?, ?, ?, ?, ?)
+    """, (project_id, rewrite, feature_table, strategy, doubts))
     conn.commit()
 
-def get_test_cases(project_id):
-    cursor.execute("SELECT id, title, steps, expected, assigned_to, status FROM test_cases WHERE project_id=?", (project_id,))
+def get_testcases(project_id):
+    cursor.execute("SELECT * FROM testcases WHERE project_id=?", (project_id,))
     return cursor.fetchall()
 
-def save_bug(project_id, test_case_id, title, desc, assigned):
+def update_status(testcase_id, new_status):
+    cursor.execute("UPDATE testcases SET status=? WHERE id=?", (new_status, testcase_id))
+    conn.commit()
+
+def create_bug(project_id, testcase_id, title, steps, assigned):
     cursor.execute("""
-        INSERT INTO bugs (project_id, test_case_id, title, description, assigned_to, created_at)
-        VALUES (?, ?, ?, ?, ?, ?)
-    """, (project_id, test_case_id, title, desc, assigned, datetime.now().strftime("%Y-%m-%d %H:%M:%S")))
+    INSERT INTO bugs (project_id, testcase_id, title, description, assigned_to, created_at)
+    VALUES (?, ?, ?, ?, ?, ?)
+    """, (
+        project_id,
+        testcase_id,
+        f"Bug from: {title}",
+        f"Auto generated from failed testcase\n\nSteps:\n{steps}",
+        assigned,
+        datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    ))
     conn.commit()
 
 def get_bugs(project_id):
-    cursor.execute("SELECT id, title, description, assigned_to, created_at FROM bugs WHERE project_id=?", (project_id,))
+    cursor.execute("SELECT * FROM bugs WHERE project_id=?", (project_id,))
     return cursor.fetchall()
 
 # ---------------- UI ---------------- #
 
 st.title("🏗️ Senior QA Operating System")
 
-# Project Selection
+# Project Section
 projects = get_projects()
 project_names = [p[1] for p in projects]
 
@@ -101,107 +109,89 @@ if st.button("Create Project"):
 
 if projects:
     selected_name = st.selectbox("Select Project", project_names)
-    selected_project = [p for p in projects if p[1] == selected_name][0]
-    project_id = selected_project[0]
+    project_id = [p[0] for p in projects if p[1] == selected_name][0]
 
-    tabs = st.tabs(["🏗️ Senior QA Audit & Strategy", "🧪 Test Cases", "✅ Execution Log", "🐞 Bug Center"])
+    tabs = st.tabs(["🏗️ Senior QA Audit & Strategy", "🧪 Test Case Section", "🐞 Bug Center"])
 
-    # ---------------- TAB A ---------------- #
+    # ---------------- TAB 1 ---------------- #
     with tabs[0]:
-        st.subheader("Senior QA Audit & Strategy")
+        st.subheader("A) 🏗️ Senior QA Audit & Strategy")
 
-        audit_data = get_audit(project_id)
-        rewrite = audit_data[0] if audit_data else ""
-        feature_table = audit_data[1] if audit_data else ""
-        strategy = audit_data[2] if audit_data else ""
-        doubts = audit_data[3] if audit_data else ""
+        audit = get_audit(project_id)
+
+        rewrite = audit[0] if audit else ""
+        feature_table = audit[1] if audit else ""
+        strategy = audit[2] if audit else ""
+        doubts = audit[3] if audit else ""
 
         rewrite = st.text_area("1️⃣ REWRITE", rewrite, height=150)
         feature_table = st.text_area("2️⃣ FEATURE TABLE", feature_table, height=150)
         strategy = st.text_area("3️⃣ STRATEGY", strategy, height=150)
         doubts = st.text_area("4️⃣ DOUBTS", doubts, height=150)
 
-        if st.button("Save Audit"):
+        if st.button("Save Audit Section"):
             save_audit(project_id, rewrite, feature_table, strategy, doubts)
-            st.success("Saved")
+            st.success("Saved Successfully")
 
-    # ---------------- TAB B ---------------- #
+    # ---------------- TAB 2 ---------------- #
     with tabs[1]:
-        st.subheader("Test Case Management")
+        st.subheader("B) 🧪 Test Case Section")
 
         title = st.text_input("Test Case Title")
         steps = st.text_area("Steps")
         expected = st.text_area("Expected Result")
-        assigned = st.text_input("Assign Developer")
+        assigned_to = st.text_input("Assign Developer")
 
         if st.button("Add Test Case"):
             cursor.execute("""
-                INSERT INTO test_cases (project_id, title, steps, expected, assigned_to)
-                VALUES (?, ?, ?, ?, ?)
-            """, (project_id, title, steps, expected, assigned))
+            INSERT INTO testcases (project_id, title, steps, expected, assigned_to)
+            VALUES (?, ?, ?, ?, ?)
+            """, (project_id, title, steps, expected, assigned_to))
             conn.commit()
-            st.success("Test Case Added")
             st.rerun()
 
         st.divider()
 
-        test_cases = get_test_cases(project_id)
+        testcases = get_testcases(project_id)
 
-        for tc in test_cases:
-            st.markdown(f"### {tc[1]}")
-            st.write(f"**Assigned To:** {tc[4]}")
-            st.write(f"Steps: {tc[2]}")
-            st.write(f"Expected: {tc[3]}")
-            st.write(f"Status: {tc[5]}")
-            st.divider()
+        for tc in testcases:
+            st.markdown(f"### {tc[2]}")
+            st.write(f"**Assigned To:** {tc[5]}")
+            st.write(f"Steps: {tc[3]}")
+            st.write(f"Expected: {tc[4]}")
 
-    # ---------------- TAB C ---------------- #
-    with tabs[2]:
-        st.subheader("Execution Log")
-
-        test_cases = get_test_cases(project_id)
-
-        for tc in test_cases:
-            st.markdown(f"### {tc[1]}")
-            status = st.selectbox(
+            new_status = st.selectbox(
                 "Status",
                 ["Pending", "Pass", "Fail"],
-                index=["Pending", "Pass", "Fail"].index(tc[5]),
+                index=["Pending", "Pass", "Fail"].index(tc[6]),
                 key=f"status_{tc[0]}"
             )
 
-            if status != tc[5]:
-                cursor.execute("UPDATE test_cases SET status=? WHERE id=?", (status, tc[0]))
-                conn.commit()
+            if new_status != tc[6]:
+                update_status(tc[0], new_status)
 
-                if status == "Fail":
-                    save_bug(
-                        project_id,
-                        tc[0],
-                        f"Bug from: {tc[1]}",
-                        f"Auto-generated from failed test case.\n\nSteps:\n{tc[2]}",
-                        tc[4]
-                    )
+                if new_status == "Fail":
+                    create_bug(project_id, tc[0], tc[2], tc[3], tc[5])
+
                 st.rerun()
 
-            st.write(f"Assigned To: {tc[4]}")
             st.divider()
 
-    # ---------------- TAB D ---------------- #
-    with tabs[3]:
-        st.subheader("Bug Center")
+    # ---------------- TAB 3 ---------------- #
+    with tabs[2]:
+        st.subheader("C) 🐞 Bug Center")
 
         bugs = get_bugs(project_id)
 
         if bugs:
             for bug in bugs:
-                st.markdown(f"### 🐞 {bug[1]}")
-                st.write(f"**Assigned To:** {bug[3]}")
-                st.write(f"**Created At:** {bug[4]}")
-                st.text_area("Description", bug[2], key=f"bug_{bug[0]}")
+                st.markdown(f"### 🐞 {bug[3]}")
+                st.write(f"**Assigned To:** {bug[5]}")
+                st.write(f"**Created At:** {bug[6]}")
+                desc = st.text_area("Bug Description", bug[4], key=f"bug_{bug[0]}")
                 st.divider()
         else:
-            st.info("No Bugs Yet")
+            st.info("No Bugs Reported Yet")
 
 else:
     st.info("Create a project to begin.")
