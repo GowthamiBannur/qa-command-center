@@ -1,5 +1,6 @@
 import streamlit as st
 import pandas as pd
+import re
 from supabase import create_client
 from openai import OpenAI
 
@@ -114,7 +115,7 @@ tab1, tab2, tab3 = st.tabs([
 ])
 
 # --------------------------------------------------
-# TAB 1 – AUDIT ONLY
+# TAB 1 – AUDIT
 # --------------------------------------------------
 with tab1:
     st.subheader("Senior QA Audit & Strategy")
@@ -123,20 +124,19 @@ with tab1:
 
     if st.button("Generate Audit Strategy"):
         prompt = f"""
-        You are a Senior QA Architect.
+You are a Senior QA Architect.
 
-        Generate:
+Generate:
+1. REWRITE
+2. FEATURE TABLE
+3. STRATEGY
+4. DOUBTS
 
-        1. REWRITE
-        2. FEATURE TABLE
-        3. STRATEGY
-        4. DOUBTS
+Do NOT generate test cases.
 
-        Do NOT generate test cases.
-
-        PRD:
-        {prd}
-        """
+PRD:
+{prd}
+"""
 
         response = client.chat.completions.create(
             model="llama-3.3-70b-versatile",
@@ -154,13 +154,10 @@ with tab1:
 # --------------------------------------------------
 # TAB 2 – EXECUTION LOG
 # --------------------------------------------------
-# --------------------------------------------------
-# TAB 2 – EXECUTION LOG
-# --------------------------------------------------
 with tab2:
     st.subheader("Execution Log")
 
-    # ---------- Generate Test Cases Button ----------
+    # ---------- Generate Test Cases ----------
     if st.button("Generate Test Cases"):
 
         strategy = load_strategy(pid)
@@ -168,18 +165,12 @@ with tab2:
         if not strategy:
             st.warning("Generate Audit Strategy first.")
         else:
-            prompt = f"""
-You are a Senior QA Architect.
-
+            prompt = """
 Generate 15 professional test cases.
 
-STRICT RULES:
-- Return ONLY pipe separated values.
-- DO NOT add numbering.
-- DO NOT add words like case_id:, scenario:, expected:
-- DO NOT repeat column names.
+Return ONLY pipe separated values.
 
-FORMAT:
+Format strictly:
 Scenario | Expected Result | Severity | Priority | Module
 """
 
@@ -191,26 +182,35 @@ Scenario | Expected Result | Severity | Priority | Module
             raw_text = response.choices[0].message.content.strip()
 
             rows = []
-            lines = raw_text.split("\n")
             tc_counter = 1
 
-            for line in lines:
+            for line in raw_text.split("\n"):
                 if "|" not in line:
                     continue
 
                 parts = [p.strip() for p in line.split("|")]
-
                 if len(parts) != 5:
                     continue
+
+                def clean(text):
+                    text = re.sub(r"^\d+\.\s*", "", text)
+                    text = re.sub(r"^(scenario|expected|expected result|severity|priority|module)\s*:\s*", "", text, flags=re.IGNORECASE)
+                    return text.strip()
+
+                scenario = clean(parts[0])
+                expected = clean(parts[1])
+                severity = clean(parts[2])
+                priority = clean(parts[3])
+                module = clean(parts[4])
 
                 rows.append({
                     "project_id": pid,
                     "case_id": f"TC_{tc_counter:03}",
-                    "scenario": parts[0],
-                    "expected": parts[1],
-                    "severity": parts[2],
-                    "priority": parts[3],
-                    "module": parts[4],
+                    "scenario": scenario,
+                    "expected": expected,
+                    "severity": severity,
+                    "priority": priority,
+                    "module": module,
                     "status": "Pending"
                 })
 
@@ -221,7 +221,7 @@ Scenario | Expected Result | Severity | Priority | Module
                 st.success(f"{len(rows)} Test Cases Generated")
                 st.rerun()
 
-    # ---------- Load Test Cases ----------
+    # ---------- Load & Execute ----------
     df = load_testcases(pid)
 
     if df.empty:
@@ -256,7 +256,7 @@ Scenario | Expected Result | Severity | Priority | Module
             st.rerun()
 
 # --------------------------------------------------
-# TAB 3 – BUG CENTER (Editable)
+# TAB 3 – BUG CENTER
 # --------------------------------------------------
 with tab3:
     st.subheader("Bug Center")
