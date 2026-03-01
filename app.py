@@ -68,34 +68,42 @@ with st.sidebar:
     else:
         st.session_state.active_id = current_proj
 
-    # --- UPDATED SYNC LOGIC: Saves Tab 1 even if Tab 2 is empty ---
+    # --- REPLACED SYNC LOGIC: Prevents APIError and Saves Strategy ---
     if st.button("🌊 Sync Full Project (All Tabs)", use_container_width=True):
-        # 1. Clear old data for this project
-        supabase.table("qa_tracker").delete().eq("project_name", st.session_state.active_id).execute()
-        
-        # 2. Get the current table data
-        data = st.session_state.current_df.to_dict(orient='records')
-        
-        # 3. FIX: If the table is empty, create one metadata row so the Strategy text can be saved
-        if not data:
-            data = [{"ID": "META", "Scenario": "Strategy Backup", "Status": "System"}]
-        
-        # 4. Prepare data with the audit_report included
-        for row in data: 
-            row['project_name'] = st.session_state.active_id
-            row['strategy_text'] = st.session_state.audit_report 
+        try:
+            # 1. Clear old data for this project
+            supabase.table("qa_tracker").delete().eq("project_name", st.session_state.active_id).execute()
             
-        supabase.table("qa_tracker").insert(data).execute()
-        st.success(f"Successfully Synced '{st.session_state.active_id}' Strategy + {len(data)} Rows!")
+            # 2. Prepare Data
+            data_df = st.session_state.current_df.copy()
+            
+            # 3. Handle empty tables to ensure Strategy still saves
+            if data_df.empty:
+                meta_row = pd.DataFrame([{"ID": "META", "Scenario": "Strategy Backup"}])
+                data_df = ensure_standard_columns(meta_row)
+            
+            data = data_df.to_dict(orient='records')
+            for row in data: 
+                row['project_name'] = st.session_state.active_id
+                row['strategy_text'] = st.session_state.audit_report 
+            
+            # 4. Insert to Supabase
+            supabase.table("qa_tracker").insert(data).execute()
+            st.success(f"Successfully Synced '{st.session_state.active_id}'!")
+        except Exception as e:
+            st.error("Sync Failed! Check if your table has the 'strategy_text' column.")
+            st.info("Run in SQL Editor: ALTER TABLE qa_tracker ADD COLUMN IF NOT EXISTS strategy_text TEXT;")
 
 # 6. Data Loading (Restores Tab 1 + Tab 2 + Tab 3)
 if st.session_state.get('last_project') != st.session_state.active_id:
     res = supabase.table("qa_tracker").select("*").eq("project_name", st.session_state.active_id).execute()
     if res.data:
         df_loaded = pd.DataFrame(res.data)
-        st.session_state.current_df = ensure_standard_columns(df_loaded)
-        # Restore the Strategy text from the first available row
-        st.session_state.audit_report = res.data[0].get('strategy_text', "")
+        # Filter out the hidden metadata row
+        if not df_loaded.empty:
+            df_loaded = df_loaded[df_loaded["ID"] != "META"]
+            st.session_state.current_df = ensure_standard_columns(df_loaded)
+            st.session_state.audit_report = res.data[0].get('strategy_text', "")
     else:
         st.session_state.current_df = ensure_standard_columns(pd.DataFrame())
         st.session_state.audit_report = ""
@@ -145,7 +153,6 @@ with tab1:
             st.rerun()
 
     if st.session_state.audit_report:
-        # DISPLAY LOGIC: Split at separator and filter out point 5 + CASE lines
         strategy_part = st.session_state.audit_report.split("[SEPARATOR]")[0]
         strategy_part = re.split(r'\n5\.?\s*TEST_CASES', strategy_part, flags=re.IGNORECASE)[0]
         strategy_part = "\n".join([line for line in strategy_part.split("\n") if "CASE:" not in line])
