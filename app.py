@@ -9,7 +9,7 @@ from openai import OpenAI
 st.set_page_config(page_title="Senior QA Command Center", layout="wide")
 
 # --------------------------------------------------
-# INIT CONNECTIONS
+# CONNECTIONS
 # --------------------------------------------------
 @st.cache_resource
 def init_supabase():
@@ -19,17 +19,17 @@ def init_supabase():
     )
 
 @st.cache_resource
-def init_groq():
+def init_ai():
     return OpenAI(
         base_url="https://api.groq.com/openai/v1",
         api_key=st.secrets["GROQ_API_KEY"]
     )
 
 supabase = init_supabase()
-client = init_groq()
+client = init_ai()
 
 # --------------------------------------------------
-# HELPERS
+# DATABASE HELPERS
 # --------------------------------------------------
 def get_projects():
     return supabase.table("projects").select("*").execute().data or []
@@ -41,13 +41,10 @@ def get_project_id(name):
     res = supabase.table("projects").select("id").eq("name", name).execute()
     return res.data[0]["id"]
 
-def save_strategy(pid, rewrite, feature_table, strategy, doubts):
+def save_strategy(pid, content):
     supabase.table("strategies").upsert({
         "project_id": pid,
-        "rewrite": rewrite,
-        "feature_table": feature_table,
-        "strategy_text": strategy,
-        "doubts": doubts
+        "rewrite": content
     }).execute()
 
 def load_strategy(pid):
@@ -69,7 +66,7 @@ def bug_exists(test_case_id):
 def create_bug(row):
     supabase.table("bugs").insert({
         "test_case_id": row["id"],
-        "title": f"Bug from: {row['scenario']}",
+        "title": f"Bug: {row['scenario']}",
         "description": f"Expected:\n{row['expected']}\n\nActual:\n{row.get('actual_result','')}",
         "status": "Open"
     }).execute()
@@ -85,16 +82,16 @@ def load_bugs_for_project(pid):
 # SIDEBAR
 # --------------------------------------------------
 with st.sidebar:
-    st.title("📂 Projects")
+    st.title("Projects")
 
     projects = get_projects()
     names = [p["name"] for p in projects]
 
-    selected = st.selectbox("Switch Project", names + ["+ New Project"])
+    selected = st.selectbox("Select Project", names + ["+ New Project"])
 
     if selected == "+ New Project":
         new_name = st.text_input("New Project Name")
-        if st.button("Create Project"):
+        if st.button("Create"):
             create_project(new_name)
             st.rerun()
     else:
@@ -111,22 +108,24 @@ pid = st.session_state.project_id
 # TABS
 # --------------------------------------------------
 tab1, tab2, tab3 = st.tabs([
-    "🏗️ Senior QA Audit & Strategy",
-    "✅ Execution Log",
-    "🐞 Bug Center"
+    "Senior QA Audit & Strategy",
+    "Execution Log",
+    "Bug Center"
 ])
 
 # --------------------------------------------------
-# TAB 1 – AUDIT (NO TEST CASE DISPLAY)
+# TAB 1 – AUDIT ONLY
 # --------------------------------------------------
 with tab1:
     st.subheader("Senior QA Audit & Strategy")
 
-    prd = st.text_area("Paste PRD", height=200)
+    prd = st.text_area("Paste PRD", height=250)
 
-    if st.button("Generate Strategy"):
+    if st.button("Generate Audit Strategy"):
         prompt = f"""
-        Analyze the PRD and generate:
+        You are a Senior QA Architect.
+
+        Generate:
 
         1. REWRITE
         2. FEATURE TABLE
@@ -146,8 +145,8 @@ with tab1:
 
         result = response.choices[0].message.content
 
-        save_strategy(pid, result, "", "", "")
-        st.success("Generated & Saved")
+        save_strategy(pid, result)
+        st.success("Audit Strategy Saved")
 
     strategy = load_strategy(pid)
 
@@ -155,18 +154,61 @@ with tab1:
         st.markdown(strategy["rewrite"])
 
 # --------------------------------------------------
-# TAB 2 – EXECUTION LOG
+# TAB 2 – EXECUTION LOG (TEST CASES LIVE HERE)
 # --------------------------------------------------
 with tab2:
     st.subheader("Execution Log")
 
+    # -------- Generate Test Cases --------
+    if st.button("Generate Test Cases"):
+        strategy = load_strategy(pid)
+
+        if not strategy:
+            st.warning("Generate Audit Strategy first.")
+        else:
+            prompt = f"""
+            Generate structured test cases based on this QA strategy.
+
+            Format strictly:
+            case_id | scenario | expected | severity | priority | module
+
+            Strategy:
+            {strategy['rewrite']}
+            """
+
+            response = client.chat.completions.create(
+                model="llama-3.3-70b-versatile",
+                messages=[{"role": "user", "content": prompt}]
+            )
+
+            result = response.choices[0].message.content
+
+            rows = []
+            for line in result.split("\n"):
+                if "|" in line:
+                    parts = [p.strip() for p in line.split("|")]
+                    if len(parts) >= 6:
+                        rows.append({
+                            "project_id": pid,
+                            "case_id": parts[0],
+                            "scenario": parts[1],
+                            "expected": parts[2],
+                            "severity": parts[3],
+                            "priority": parts[4],
+                            "module": parts[5],
+                            "status": "Pending"
+                        })
+
+            if rows:
+                supabase.table("test_cases").insert(rows).execute()
+                st.success(f"{len(rows)} Test Cases Generated")
+
+    # -------- Load & Execute --------
     df = load_testcases(pid)
 
     if df.empty:
         st.info("No test cases found.")
     else:
-        df["status"] = df["status"].fillna("Pending")
-
         edited_df = st.data_editor(
             df,
             column_config={
@@ -198,15 +240,15 @@ with tab3:
     bugs = load_bugs_for_project(pid)
 
     if not bugs:
-        st.info("No Bugs Yet.")
+        st.info("No Bugs Reported.")
     else:
         for bug in bugs:
             with st.expander(bug["title"]):
-                st.write("**Scenario:**", bug["test_cases"]["scenario"])
-                st.write("**Assigned To:**", bug["test_cases"]["assigned_to"])
-                st.write("**Severity:**", bug["test_cases"]["severity"])
-                st.write("**Priority:**", bug["test_cases"]["priority"])
-                st.write("**Status:**", bug["status"])
-                st.write("**Created At:**", bug["created_at"])
-                st.write("**Description:**")
+                st.write("Scenario:", bug["test_cases"]["scenario"])
+                st.write("Assigned To:", bug["test_cases"]["assigned_to"])
+                st.write("Severity:", bug["test_cases"]["severity"])
+                st.write("Priority:", bug["test_cases"]["priority"])
+                st.write("Status:", bug["status"])
+                st.write("Created At:", bug["created_at"])
+                st.write("Description:")
                 st.write(bug["description"])
