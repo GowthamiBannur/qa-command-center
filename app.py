@@ -158,57 +158,78 @@ with tab2:
     st.subheader("Execution Log")
 
    # Generate Test Cases
-if st.button("Generate Test Cases"):
-    strategy = load_strategy(pid)
+import re
+import pandas as pd
 
-    if not strategy:
-        st.warning("Generate Audit Strategy first.")
-    else:
-        prompt = f"""
-Generate structured test cases.
+def generate_testcases(client, feature_text):
+
+    prompt = f"""
+You are a Senior QA Architect.
+
+Generate 15 professional test cases.
 
 STRICT RULES:
-- DO NOT number rows
-- DO NOT write labels like case_id:, scenario:, expected:
-- DO NOT add explanations
-- Output ONLY raw rows
+- Return ONLY pipe separated values.
+- DO NOT add numbering.
+- DO NOT add words like case_id:, scenario:, expected:
+- DO NOT repeat column names.
+- Format strictly:
 
-FORMAT EXACTLY:
-TC_001 | Scenario text | Expected result text | High | High | Module Name
+Scenario | Expected Result | Severity | Priority | Module
 
-Columns order:
-case_id | scenario | expected | severity | priority | module
-
-Based on:
-{strategy['rewrite']}
+Example:
+User is in abandoned checkout with subtotal ₹1999 | Small jewelry box is offered | High | High | Eligibility Determination
 """
 
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}]
-        )
+    response = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": prompt}]
+    )
 
-        result = response.choices[0].message.content
+    raw_text = response.choices[0].message.content.strip()
 
-        rows = []
-        for line in result.split("\n"):
-            if line.count("|") == 5:
-                parts = [p.strip() for p in line.split("|")]
-                rows.append({
-                    "project_id": pid,
-                    "case_id": parts[0],
-                    "scenario": parts[1],
-                    "expected": parts[2],
-                    "severity": parts[3],
-                    "priority": parts[4],
-                    "module": parts[5],
-                    "status": "Pending"
-                })
+    rows = []
+    lines = raw_text.split("\n")
 
-        if rows:
-            supabase.table("test_cases").insert(rows).execute()
-            st.success(f"{len(rows)} Test Cases Generated")
+    tc_counter = 1
 
+    for line in lines:
+        line = line.strip()
+
+        if "|" not in line:
+            continue
+
+        parts = [p.strip() for p in line.split("|")]
+
+        if len(parts) != 5:
+            continue
+
+        case_id = f"TC_{tc_counter:03}"
+
+        rows.append([
+            case_id,
+            parts[0],  # Scenario
+            parts[1],  # Expected
+            parts[2],  # Severity
+            parts[3],  # Priority
+            parts[4]   # Module
+        ])
+
+        tc_counter += 1
+
+    df = pd.DataFrame(rows, columns=[
+        "Case ID",
+        "Scenario",
+        "Expected Result",
+        "Status",
+        "Severity",
+        "Priority",
+        "Module"
+    ])
+
+    df["Status"] = "Fail"
+
+    return df
     # Load Test Cases
     df = load_testcases(pid)
 
