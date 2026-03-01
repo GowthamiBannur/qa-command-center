@@ -10,10 +10,10 @@ from openai import OpenAI
 st.set_page_config(page_title="QA Command Center", layout="wide")
 
 # =========================
-# SAFE API CLIENT SETUP
+# SAFE API SETUP (GROQ)
 # =========================
 if "GROQ_API_KEY" not in st.secrets or not st.secrets["GROQ_API_KEY"]:
-    st.error("GROQ_API_KEY not found in Streamlit Secrets.")
+    st.error("GROQ_API_KEY not configured in Streamlit Secrets.")
     st.stop()
 
 client = OpenAI(
@@ -25,7 +25,7 @@ TESTCASE_FILE = "testcases.csv"
 BUG_FILE = "bugs.csv"
 
 # =========================
-# HELPER FUNCTIONS
+# HELPERS
 # =========================
 def load_csv(file, columns):
     if os.path.exists(file):
@@ -47,67 +47,80 @@ def clean_text(text):
     return text.strip()
 
 # =========================
-# LOAD DATA
+# DATA
 # =========================
 testcase_columns = [
-    "project_id",
-    "case_id",
-    "scenario",
-    "expected",
-    "severity",
-    "priority",
-    "module",
-    "status",
+    "project_id","case_id","scenario",
+    "expected","severity","priority",
+    "module","status"
 ]
 
 bug_columns = [
-    "bug_id",
-    "project_id",
-    "case_id",
-    "bug_title",
-    "severity",
-    "status",
+    "bug_id","project_id","case_id",
+    "bug_title","severity","status"
 ]
 
 tc_df = load_csv(TESTCASE_FILE, testcase_columns)
 bug_df = load_csv(BUG_FILE, bug_columns)
 
 # =========================
-# TABS
+# SIDEBAR
+# =========================
+with st.sidebar:
+    st.title("QA Command Center")
+
+    st.markdown("### Projects")
+
+    existing_projects = tc_df["project_id"].unique() if not tc_df.empty else []
+
+    selected_project = st.selectbox(
+        "Select Project",
+        options=["Create New"] + list(existing_projects)
+    )
+
+    st.markdown("---")
+    st.markdown("### Senior QA Audit & Strategy")
+
+# =========================
+# MAIN AREA TABS
 # =========================
 tab1, tab2, tab3 = st.tabs(
-    ["Generate Testcases", "Execution Log", "Bug Centre"]
+    ["Generate Testcases", "Execution Log", "Bug Center"]
 )
 
 # =========================================================
-# TAB 1 — GENERATE TESTCASES
+# TAB 1 — GENERATE
 # =========================================================
 with tab1:
 
     st.header("Generate AI Test Cases")
 
-    project_id = st.text_input("Project ID")
+    if selected_project == "Create New":
+        project_id = st.text_input("Enter New Project ID")
+    else:
+        project_id = selected_project
+
     feature_input = st.text_area("Enter Feature / PRD")
 
     if st.button("Generate Test Cases"):
 
         if not project_id or not feature_input:
-            st.warning("Please enter Project ID and Feature.")
+            st.warning("Enter Project ID and Feature.")
         else:
 
-            with st.spinner("Generating test cases..."):
+            with st.spinner("Generating..."):
 
+                # Remove old project testcases
                 tc_df = tc_df[tc_df["project_id"] != project_id]
 
                 prompt = f"""
-Generate 15 structured test cases.
+Generate 15 QA test cases.
 
-Return STRICTLY in this format:
+Format strictly:
 Scenario | Expected Result | Severity | Priority | Module
 
 No numbering.
-No prefixes.
-No explanations.
+No extra text.
 
 Feature:
 {feature_input}
@@ -115,20 +128,16 @@ Feature:
 
                 response = client.chat.completions.create(
                     model="llama3-70b-8192",
-                    messages=[
-                        {"role": "user", "content": prompt}
-                    ],
+                    messages=[{"role": "user", "content": prompt}],
                     temperature=0.3,
                 )
 
-                output = response.choices[0].message.content.strip()
-                lines = output.split("\n")
+                lines = response.choices[0].message.content.strip().split("\n")
 
                 rows = []
-                tc_counter = 1
+                counter = 1
 
                 for line in lines:
-
                     if "|" not in line:
                         continue
 
@@ -139,28 +148,24 @@ Feature:
 
                     scenario, expected, severity, priority, module = parts
 
-                    rows.append(
-                        {
-                            "project_id": project_id,
-                            "case_id": f"TC_{tc_counter:03}",
-                            "scenario": scenario,
-                            "expected": expected,
-                            "severity": severity,
-                            "priority": priority,
-                            "module": module,
-                            "status": "Pending",
-                        }
-                    )
+                    rows.append({
+                        "project_id": project_id,
+                        "case_id": f"TC_{counter:03}",
+                        "scenario": scenario,
+                        "expected": expected,
+                        "severity": severity,
+                        "priority": priority,
+                        "module": module,
+                        "status": "Pending"
+                    })
 
-                    tc_counter += 1
+                    counter += 1
 
                 new_df = pd.DataFrame(rows, columns=testcase_columns)
-
                 tc_df = pd.concat([tc_df, new_df], ignore_index=True)
-
                 save_csv(tc_df, TESTCASE_FILE)
 
-                st.success("Test cases generated successfully.")
+                st.success("Test cases generated.")
 
 # =========================================================
 # TAB 2 — EXECUTION LOG
@@ -172,80 +177,51 @@ with tab2:
     if tc_df.empty:
         st.info("No test cases available.")
     else:
+        filtered = tc_df if selected_project == "Create New" else tc_df[tc_df["project_id"] == selected_project]
 
-        edited_df = st.data_editor(
-            tc_df,
-            use_container_width=True,
-        )
+        edited = st.data_editor(filtered, use_container_width=True)
 
-        if st.button("Save Execution Updates"):
-            save_csv(edited_df, TESTCASE_FILE)
-            st.success("Execution log updated successfully.")
+        if st.button("Save Execution Changes"):
+            save_csv(tc_df, TESTCASE_FILE)
+            st.success("Saved.")
 
 # =========================================================
-# TAB 3 — BUG CENTRE
+# TAB 3 — BUG CENTER
 # =========================================================
 with tab3:
 
-    st.header("Bug Centre")
+    st.header("Bug Center")
 
     if tc_df.empty:
         st.info("Generate test cases first.")
     else:
 
-        project_filter = st.selectbox(
-            "Select Project",
-            tc_df["project_id"].unique(),
-        )
+        filtered = tc_df if selected_project == "Create New" else tc_df[tc_df["project_id"] == selected_project]
 
-        project_cases = tc_df[
-            tc_df["project_id"] == project_filter
-        ]
+        if not filtered.empty:
 
-        case_select = st.selectbox(
-            "Select Test Case",
-            project_cases["case_id"],
-        )
+            case_select = st.selectbox("Select Test Case", filtered["case_id"])
 
-        bug_title = st.text_input("Bug Title")
-        bug_severity = st.selectbox(
-            "Severity",
-            ["Low", "Medium", "High", "Critical"],
-        )
+            bug_title = st.text_input("Bug Title")
+            severity = st.selectbox("Severity", ["Low","Medium","High","Critical"])
+            status = st.selectbox("Status", ["Open","In Progress","Closed"])
 
-        bug_status = st.selectbox(
-            "Status",
-            ["Open", "In Progress", "Closed"],
-        )
-
-        if st.button("Report Bug"):
-
-            if not bug_title:
-                st.warning("Enter bug title.")
-            else:
-
+            if st.button("Report Bug"):
                 bug_id = f"BUG_{len(bug_df)+1:03}"
 
-                new_bug = pd.DataFrame(
-                    [
-                        {
-                            "bug_id": bug_id,
-                            "project_id": project_filter,
-                            "case_id": case_select,
-                            "bug_title": bug_title,
-                            "severity": bug_severity,
-                            "status": bug_status,
-                        }
-                    ]
-                )
+                new_bug = pd.DataFrame([{
+                    "bug_id": bug_id,
+                    "project_id": selected_project,
+                    "case_id": case_select,
+                    "bug_title": bug_title,
+                    "severity": severity,
+                    "status": status
+                }])
 
-                bug_df = pd.concat(
-                    [bug_df, new_bug], ignore_index=True
-                )
-
+                bug_df = pd.concat([bug_df, new_bug], ignore_index=True)
                 save_csv(bug_df, BUG_FILE)
 
-                st.success("Bug reported successfully.")
+                st.success("Bug reported.")
 
         st.subheader("Logged Bugs")
         st.dataframe(bug_df)
