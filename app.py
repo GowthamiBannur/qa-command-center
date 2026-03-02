@@ -69,22 +69,28 @@ for p in projects:
 # 1️⃣ SENIOR QA AUDIT
 # -------------------------------------------------
 
-if menu == "Senior QA Audit":
+# --- INIT CLIENTS ---
+groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
+supabase = create_client(
+    st.secrets["SUPABASE_URL"],
+    st.secrets["SUPABASE_KEY"]
+)
 
-    st.title("Senior QA Audit & Strategy")
+st.title("Senior QA AI Audit Tool")
 
-    feature_name = st.text_input("Feature Name")
-    prd_text = st.text_area("Paste PRD Here", height=250)
+project_id = st.text_input("Project ID")
+feature_name = st.text_input("Feature Name")
+prd_text = st.text_area("Paste PRD here")
 
-    if st.button("Generate Audit"):
+if st.button("Generate Audit"):
 
-        if not project_id:
-            st.error("Select a project first.")
-            st.stop()
+    if not project_id:
+        st.error("Select project first.")
+        st.stop()
 
-        prd_text = prd_text[:5000]
+    prd_text = prd_text[:5000]
 
-        prompt = f"""
+    prompt = f"""
 You are a Senior QA Architect.
 
 Return ONLY valid JSON.
@@ -96,7 +102,8 @@ Feature: {feature_name}
 PRD:
 {prd_text}
 
-JSON format:
+Return this JSON:
+
 {{
   "summary": "",
   "feature_table": "",
@@ -105,32 +112,38 @@ JSON format:
 }}
 """
 
-        try:
-            response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
-                messages=[{"role": "user", "content": prompt}],
-                temperature=0.2
-            )
+    try:
+        response = groq_client.chat.completions.create(
+            model="llama-3.1-8b-instant",   # ✅ UPDATED MODEL
+            messages=[{"role": "user", "content": prompt}],
+            temperature=0.2
+        )
 
-            raw_text = response.choices[0].message.content.strip()
-            audit_data = extract_json(raw_text)
+        raw_text = response.choices[0].message.content.strip()
 
-            if not audit_data:
-                st.error("AI did not return valid JSON.")
-                st.stop()
+        # --- SAFE JSON EXTRACTION ---
+        json_start = raw_text.find("{")
+        json_end = raw_text.rfind("}") + 1
+        clean_json = raw_text[json_start:json_end]
 
-            supabase.table("audits").insert({
-                "project_id": project_id,
-                "summary": audit_data.get("summary"),
-                "feature_table": audit_data.get("feature_table"),
-                "strategy": audit_data.get("strategy"),
-                "pm_doubts": audit_data.get("pm_doubts")
-            }).execute()
+        audit_data = json.loads(clean_json)
 
-            st.success("Audit Saved Successfully")
+        # --- SAVE TO SUPABASE ---
+        supabase.table("audits").insert({
+            "project_id": project_id,
+            "summary": audit_data.get("summary"),
+            "feature_table": audit_data.get("feature_table"),
+            "strategy": audit_data.get("strategy"),
+            "pm_doubts": audit_data.get("pm_doubts")
+        }).execute()
 
-        except Exception as e:
-            st.error(f"Groq Error: {e}")
+        st.success("Audit Saved Successfully ✅")
+
+        st.subheader("Generated Audit")
+        st.json(audit_data)
+
+    except Exception as e:
+        st.error(f"Groq Error: {e}")
 
 # -------------------------------------------------
 # 2️⃣ AI TESTCASE GENERATOR
