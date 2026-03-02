@@ -20,18 +20,18 @@ groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 # -------------------------
 # FUNCTIONS
 # -------------------------
-
 def generate_audit(feature_name, prd_text):
+    prd_text = prd_text[:6000]
+
     prompt = f"""
-You are a Senior QA Architect.
+Return valid JSON only.
 
-For the feature: {feature_name}
+Feature: {feature_name}
 
-Based on this PRD:
+PRD:
 {prd_text}
 
-Return strictly valid JSON:
-
+Return:
 {{
   "summary": "",
   "feature_table": "",
@@ -41,9 +41,10 @@ Return strictly valid JSON:
 """
 
     response = groq_client.chat.completions.create(
-        model="llama3-70b-8192",
+        model="llama3-8b-8192",
         messages=[{"role": "user", "content": prompt}],
-        temperature=0.2
+        temperature=0.2,
+        response_format={"type": "json_object"}
     )
 
     return json.loads(response.choices[0].message.content)
@@ -71,9 +72,11 @@ Return JSON array:
 """
 
     response = groq_client.chat.completions.create(
-        model="llama3-70b-8192",
-        messages=[{"role": "user", "content": prompt}],
-        temperature=0.2
+    model="llama3-8b-8192",
+    messages=[{"role": "user", "content": prompt}],
+    temperature=0.2,
+    response_format={"type": "json_object"}
+)
     )
 
     return json.loads(response.choices[0].message.content)
