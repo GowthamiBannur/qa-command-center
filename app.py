@@ -1,227 +1,182 @@
 import streamlit as st
-import pandas as pd
-import os
-import re
-from openai import OpenAI
+from supabase import create_client
+from groq import Groq
+import json
 
-# =========================
-# PAGE CONFIG
-# =========================
+# -------------------------
+# CONFIG
+# -------------------------
+
 st.set_page_config(page_title="QA Command Center", layout="wide")
 
-# =========================
-# SAFE API SETUP (GROQ)
-# =========================
-if "GROQ_API_KEY" not in st.secrets or not st.secrets["GROQ_API_KEY"]:
-    st.error("GROQ_API_KEY not configured in Streamlit Secrets.")
-    st.stop()
-
-client = OpenAI(
-    api_key=st.secrets["GROQ_API_KEY"],
-    base_url="https://api.groq.com/openai/v1",
+# Clients
+supabase = create_client(
+    st.secrets["SUPABASE_URL"],
+    st.secrets["SUPABASE_KEY"]
 )
 
-TESTCASE_FILE = "testcases.csv"
-BUG_FILE = "bugs.csv"
+groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
-# =========================
-# HELPERS
-# =========================
-def load_csv(file, columns):
-    if os.path.exists(file):
-        return pd.read_csv(file)
-    else:
-        return pd.DataFrame(columns=columns)
+# -------------------------
+# FUNCTIONS
+# -------------------------
 
-def save_csv(df, file):
-    df.to_csv(file, index=False)
+def generate_audit(feature_name, prd_text):
+    prompt = f"""
+You are a Senior QA Architect.
 
-def clean_text(text):
-    text = re.sub(r"^\d+\.\s*", "", text)
-    text = re.sub(
-        r"^(scenario|expected|expected result|severity|priority|module)\s*:\s*",
-        "",
-        text,
-        flags=re.IGNORECASE,
-    )
-    return text.strip()
+For the feature: {feature_name}
 
-# =========================
-# DATA
-# =========================
-testcase_columns = [
-    "project_id","case_id","scenario",
-    "expected","severity","priority",
-    "module","status"
-]
+Based on this PRD:
+{prd_text}
 
-bug_columns = [
-    "bug_id","project_id","case_id",
-    "bug_title","severity","status"
-]
+Return strictly valid JSON:
 
-tc_df = load_csv(TESTCASE_FILE, testcase_columns)
-bug_df = load_csv(BUG_FILE, bug_columns)
-
-# =========================
-# SIDEBAR
-# =========================
-with st.sidebar:
-    st.title("QA Command Center")
-
-    st.markdown("### Projects")
-
-    existing_projects = tc_df["project_id"].unique() if not tc_df.empty else []
-
-    selected_project = st.selectbox(
-        "Select Project",
-        options=["Create New"] + list(existing_projects)
-    )
-
-    st.markdown("---")
-    st.markdown("### Senior QA Audit & Strategy")
-
-# =========================
-# MAIN AREA TABS
-# =========================
-tab1, tab2, tab3 = st.tabs(
-    ["Generate Testcases", "Execution Log", "Bug Center"]
-)
-
-# =========================================================
-# TAB 1 — GENERATE
-# =========================================================
-with tab1:
-
-    st.header("Generate AI Test Cases")
-
-    if selected_project == "Create New":
-        project_id = st.text_input("Enter New Project ID")
-    else:
-        project_id = selected_project
-
-    feature_input = st.text_area("Enter Feature / PRD")
-
-    if st.button("Generate Test Cases"):
-
-        if not project_id or not feature_input:
-            st.warning("Enter Project ID and Feature.")
-        else:
-
-            with st.spinner("Generating..."):
-
-                # Remove old project testcases
-                tc_df = tc_df[tc_df["project_id"] != project_id]
-
-                prompt = f"""
-Generate 15 QA test cases.
-
-Format strictly:
-Scenario | Expected Result | Severity | Priority | Module
-
-No numbering.
-No extra text.
-
-Feature:
-{feature_input}
+{{
+  "summary": "",
+  "feature_table": "",
+  "strategy": "",
+  "pm_doubts": ""
+}}
 """
 
-                response = client.chat.completions.create(
-                    model="llama3-70b-8192",
-                    messages=[{"role": "user", "content": prompt}],
-                    temperature=0.3,
-                )
+    response = groq_client.chat.completions.create(
+        model="llama3-70b-8192",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2
+    )
 
-                lines = response.choices[0].message.content.strip().split("\n")
+    return json.loads(response.choices[0].message.content)
 
-                rows = []
-                counter = 1
 
-                for line in lines:
-                    if "|" not in line:
-                        continue
+def generate_testcases(feature_name, prd_text):
+    prompt = f"""
+Generate structured JSON test cases.
 
-                    parts = [clean_text(p) for p in line.split("|")]
+Feature: {feature_name}
+PRD:
+{prd_text}
 
-                    if len(parts) != 5:
-                        continue
+Return JSON array:
 
-                    scenario, expected, severity, priority, module = parts
+[
+  {{
+    "title": "",
+    "type": "",
+    "priority": "",
+    "steps": "",
+    "expected_result": ""
+  }}
+]
+"""
 
-                    rows.append({
-                        "project_id": project_id,
-                        "case_id": f"TC_{counter:03}",
-                        "scenario": scenario,
-                        "expected": expected,
-                        "severity": severity,
-                        "priority": priority,
-                        "module": module,
-                        "status": "Pending"
-                    })
+    response = groq_client.chat.completions.create(
+        model="llama3-70b-8192",
+        messages=[{"role": "user", "content": prompt}],
+        temperature=0.2
+    )
 
-                    counter += 1
+    return json.loads(response.choices[0].message.content)
 
-                new_df = pd.DataFrame(rows, columns=testcase_columns)
-                tc_df = pd.concat([tc_df, new_df], ignore_index=True)
-                save_csv(tc_df, TESTCASE_FILE)
+# -------------------------
+# SIDEBAR
+# -------------------------
 
-                st.success("Test cases generated.")
+st.sidebar.title("Projects")
 
-# =========================================================
-# TAB 2 — EXECUTION LOG
-# =========================================================
-with tab2:
+projects = supabase.table("projects").select("*").execute().data
+project_names = [p["name"] for p in projects]
 
-    st.header("Execution Log")
+selected_project = st.sidebar.selectbox(
+    "Select Project",
+    project_names if project_names else ["No Projects"]
+)
 
-    if tc_df.empty:
-        st.info("No test cases available.")
-    else:
-        filtered = tc_df if selected_project == "Create New" else tc_df[tc_df["project_id"] == selected_project]
+new_project = st.sidebar.text_input("Create New Project")
 
-        edited = st.data_editor(filtered, use_container_width=True)
+if st.sidebar.button("Create"):
+    if new_project:
+        supabase.table("projects").insert({"name": new_project}).execute()
+        st.rerun()
 
-        if st.button("Save Execution Changes"):
-            save_csv(tc_df, TESTCASE_FILE)
-            st.success("Saved.")
+# Get project_id
+project_id = None
+for p in projects:
+    if p["name"] == selected_project:
+        project_id = p["id"]
 
-# =========================================================
-# TAB 3 — BUG CENTER
-# =========================================================
-with tab3:
+# -------------------------
+# MAIN
+# -------------------------
 
-    st.header("Bug Center")
+st.title("Senior QA Audit & Strategy")
 
-    if tc_df.empty:
-        st.info("Generate test cases first.")
-    else:
+feature_name = st.text_input("Feature Name")
+prd_text = st.text_area("Paste PRD Here", height=200)
 
-        filtered = tc_df if selected_project == "Create New" else tc_df[tc_df["project_id"] == selected_project]
+if st.button("Generate Audit & Testcases"):
 
-        if not filtered.empty:
+    if project_id and feature_name and prd_text:
 
-            case_select = st.selectbox("Select Test Case", filtered["case_id"])
+        # Generate Audit
+        audit_data = generate_audit(feature_name, prd_text)
 
-            bug_title = st.text_input("Bug Title")
-            severity = st.selectbox("Severity", ["Low","Medium","High","Critical"])
-            status = st.selectbox("Status", ["Open","In Progress","Closed"])
+        supabase.table("audits").insert({
+            "project_id": project_id,
+            "summary": audit_data["summary"],
+            "feature_table": audit_data["feature_table"],
+            "strategy": audit_data["strategy"],
+            "pm_doubts": audit_data["pm_doubts"]
+        }).execute()
 
-            if st.button("Report Bug"):
-                bug_id = f"BUG_{len(bug_df)+1:03}"
+        # Generate Testcases
+        testcases = generate_testcases(feature_name, prd_text)
 
-                new_bug = pd.DataFrame([{
-                    "bug_id": bug_id,
-                    "project_id": selected_project,
-                    "case_id": case_select,
-                    "bug_title": bug_title,
-                    "severity": severity,
-                    "status": status
-                }])
+        for tc in testcases:
+            supabase.table("testcases").insert({
+                "project_id": project_id,
+                "title": tc["title"],
+                "type": tc["type"],
+                "priority": tc["priority"],
+                "steps": tc["steps"],
+                "expected_result": tc["expected_result"]
+            }).execute()
 
-                bug_df = pd.concat([bug_df, new_bug], ignore_index=True)
-                save_csv(bug_df, BUG_FILE)
+        st.success("Saved Successfully")
 
-                st.success("Bug reported.")
+# -------------------------
+# DISPLAY SAVED DATA
+# -------------------------
 
-        st.subheader("Logged Bugs")
-        st.dataframe(bug_df)
+if project_id:
+
+    st.subheader("Saved Audits")
+
+    audits = supabase.table("audits").select("*").eq("project_id", project_id).execute().data
+
+    for a in audits:
+        st.markdown("### Summary")
+        st.write(a["summary"])
+
+        st.markdown("### Feature Table")
+        st.write(a["feature_table"])
+
+        st.markdown("### Strategy")
+        st.write(a["strategy"])
+
+        st.markdown("### PM Doubts")
+        st.write(a["pm_doubts"])
+
+        st.divider()
+
+    st.subheader("Saved Testcases")
+
+    tcs = supabase.table("testcases").select("*").eq("project_id", project_id).execute().data
+
+    for t in tcs:
+        st.markdown(f"**{t['title']}**")
+        st.write("Type:", t["type"])
+        st.write("Priority:", t["priority"])
+        st.write("Steps:", t["steps"])
+        st.write("Expected:", t["expected_result"])
+        st.divider()
