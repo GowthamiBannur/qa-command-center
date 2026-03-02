@@ -77,7 +77,7 @@ Return JSON array:
     temperature=0.2,
     response_format={"type": "json_object"}
 )
-    )
+    
 
     return json.loads(response.choices[0].message.content)
 
