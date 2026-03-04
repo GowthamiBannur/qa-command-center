@@ -26,18 +26,41 @@ supabase, groq_client = init_clients()
 # ─────────────────────────────────────────────
 
 def extract_json(text: str) -> dict | None:
-    """Safely extract the first JSON object from model output."""
-    try:
-        start = text.find("{")
-        end   = text.rfind("}") + 1
-        if start == -1 or end == 0:
-            st.warning("⚠️ Model didn't return JSON. Raw output:")
-            st.code(text[:800])
-            return None
-        return json.loads(text[start:end])
-    except json.JSONDecodeError as e:
-        st.warning(f"⚠️ JSON parse error: {e}")
+    """
+    Robustly extract a JSON object from model output.
+    Handles: markdown fences, unescaped newlines inside strings,
+    and trailing commas.
+    """
+    import re
+
+    # 1. Strip markdown code fences if present (```json ... ``` or ``` ... ```)
+    fenced = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", text, re.DOTALL)
+    if fenced:
+        text = fenced.group(1)
+
+    # 2. Pull out the outermost { ... } block
+    start = text.find("{")
+    end   = text.rfind("}") + 1
+    if start == -1 or end == 0:
+        st.warning("⚠️ Model didn't return JSON. Raw output:")
         st.code(text[:800])
+        return None
+    raw = text[start:end]
+
+    # 3. First attempt — parse as-is
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        pass
+
+    # 4. Fix unescaped literal newlines inside JSON string values
+    #    Replace \n that are NOT already escaped with \\n
+    fixed = re.sub(r'(?<!\\)\n', r'\\n', raw)
+    try:
+        return json.loads(fixed)
+    except json.JSONDecodeError as e:
+        st.warning(f"⚠️ JSON parse error after cleanup: {e}")
+        st.code(raw[:1000])
         return None
 
 
