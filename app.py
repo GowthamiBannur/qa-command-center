@@ -115,24 +115,43 @@ st.sidebar.divider()
 projects      = get_projects()
 project_names = [p["name"] for p in projects]
 
+# Auto-select newly created project
+_auto = st.session_state.pop("_auto_select_proj", None)
+_proj_list = project_names if project_names else ["— No projects yet —"]
+_default_idx = _proj_list.index(_auto) if (_auto and _auto in _proj_list) else 0
+
 sel_proj = st.sidebar.selectbox(
     "Project",
-    project_names if project_names else ["— No projects yet —"]
+    _proj_list,
+    index=_default_idx,
 )
 project_id = get_project_id(projects, sel_proj)
 
+# Show current project clearly
+if project_id:
+    st.sidebar.success(f"📂 {sel_proj}")
+
 with st.sidebar.expander("➕ New Project"):
-    new_proj = st.text_input("Name", key="new_proj_input")
-    if st.button("Create", key="btn_new_proj"):
-        if not new_proj.strip():
-            st.error("Name required.")
+    new_proj = st.text_input("Name", key="new_proj_input",
+                              placeholder="e.g. Search Revamp v2")
+    if st.button("✅ Create Project", key="btn_new_proj", type="primary"):
+        name = new_proj.strip()
+        if not name:
+            st.error("Name cannot be empty.")
+        elif name in project_names:
+            st.warning(f'"{name}" already exists — select it from the dropdown above.')
         else:
             try:
-                supabase.table("projects").insert({"name": new_proj.strip()}).execute()
+                supabase.table("projects").insert({"name": name}).execute()
                 st.cache_data.clear()
+                st.session_state["_auto_select_proj"] = name
+                st.toast(f'✅ Project "{name}" created!', icon="🎉")
                 st.rerun()
             except Exception as e:
-                st.error(f"Failed: {e}")
+                if "23505" in str(e) or "duplicate" in str(e).lower():
+                    st.warning(f'"{name}" already exists — select it from the dropdown above.')
+                else:
+                    st.error(f"Unexpected error: {e}")
 
 def require_project():
     if not project_id:
