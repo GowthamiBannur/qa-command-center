@@ -78,8 +78,12 @@ def extract_json(text: str) -> dict | None:
     try:
         return json.loads(fixed)
     except json.JSONDecodeError as e:
-        st.warning(f"⚠️ JSON parse error after cleanup: {e}")
-        st.code(raw[:1000])
+        st.warning(
+            f"⚠️ JSON parse error: {e}\n\n"
+            "This usually means the AI response was cut off mid-way. "
+            "Try clicking Generate again — it should complete on the next attempt."
+        )
+        st.code(raw[:1200])
         return None
 
 
@@ -91,14 +95,16 @@ def call_groq(prompt: str, retries: int = 3) -> str | None:
     for attempt in range(1, retries + 1):
         try:
             response = groq_client.chat.completions.create(
-                model="llama-3.1-8b-instant",
+                model="llama-3.3-70b-versatile",
+                max_tokens=4096,
                 messages=[
                     {
                         "role": "system",
                         "content": (
                             "You are a Senior QA Engineer. "
                             "You ALWAYS respond with a single valid JSON object. "
-                            "No markdown, no code fences, no explanation — ONLY the raw JSON object."
+                            "No markdown, no code fences, no explanation — ONLY the raw JSON object. "
+                            "Always complete your full response. Never truncate."
                         ),
                     },
                     {"role": "user", "content": prompt},
@@ -224,7 +230,7 @@ STRICT RULES — violations will break the parser:
 
 Feature: {feature_name}
 PRD:
-{prd_text[:6000]}
+{prd_text[:3000]}
 
 Return exactly this structure (all values on one line, use \\n for newlines):
 {{
@@ -329,7 +335,7 @@ STRICT RULES:
 
 Feature: {feature_name}
 PRD:
-{prd_text[:6000]}
+{prd_text[:3000]}
 
 Return exactly this structure:
 {{
