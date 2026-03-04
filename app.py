@@ -17,7 +17,7 @@ supabase = create_client(
 groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
 
 # -------------------------------------------------
-# HELPER: Safe JSON Extractor
+# HELPER
 # -------------------------------------------------
 
 def extract_json(text):
@@ -29,7 +29,7 @@ def extract_json(text):
         return None
 
 # -------------------------------------------------
-# SIDEBAR NAVIGATION
+# SIDEBAR
 # -------------------------------------------------
 
 st.sidebar.title("QA Command Center")
@@ -43,8 +43,7 @@ menu = st.sidebar.radio(
 # PROJECT MANAGEMENT
 # -------------------------------------------------
 
-projects_response = supabase.table("projects").select("*").execute()
-projects = projects_response.data or []
+projects = supabase.table("projects").select("*").execute().data or []
 
 project_names = [p["name"] for p in projects]
 
@@ -69,40 +68,24 @@ for p in projects:
 # 1️⃣ SENIOR QA AUDIT
 # -------------------------------------------------
 
-# --- INIT CLIENTS ---
-groq_client = Groq(api_key=st.secrets["GROQ_API_KEY"])
-supabase = create_client(
-    st.secrets["SUPABASE_URL"],
-    st.secrets["SUPABASE_KEY"]
-)
+if menu == "Senior QA Audit":
 
-st.title("Senior QA AI Audit Tool")
+    st.title("Senior QA AI Audit Tool")
 
-project_id = st.text_input("Project ID")
-feature_name = st.text_input("Feature Name")
-prd_text = st.text_area("Paste PRD here")
+    feature_name = st.text_input("Feature Name")
+    prd_text = st.text_area("Paste PRD here", height=250)
 
-if st.button("Generate Audit"):
+    if st.button("Generate Audit"):
 
-    if not project_id:
-        st.error("Select project first.")
-        st.stop()
+        if not project_id:
+            st.error("Select project first.")
+            st.stop()
 
-    prd_text = prd_text[:5000]
-
-    prompt = f"""
-You are a Senior QA Architect.
-
+        prompt = f"""
 Return ONLY valid JSON.
-No markdown.
-No explanations.
 
 Feature: {feature_name}
-
-PRD:
-{prd_text}
-
-Return this JSON:
+PRD: {prd_text[:5000]}
 
 {{
   "summary": "",
@@ -112,38 +95,32 @@ Return this JSON:
 }}
 """
 
-    try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",   # ✅ UPDATED MODEL
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.2
-        )
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[{"role": "user", "content": prompt}],
+                temperature=0.2
+            )
 
-        raw_text = response.choices[0].message.content.strip()
+            data = extract_json(response.choices[0].message.content)
 
-        # --- SAFE JSON EXTRACTION ---
-        json_start = raw_text.find("{")
-        json_end = raw_text.rfind("}") + 1
-        clean_json = raw_text[json_start:json_end]
+            if not data:
+                st.error("Invalid JSON returned.")
+                st.stop()
 
-        audit_data = json.loads(clean_json)
+            supabase.table("audits").insert({
+                "project_id": project_id,
+                "summary": data.get("summary"),
+                "feature_table": data.get("feature_table"),
+                "strategy": data.get("strategy"),
+                "pm_doubts": data.get("pm_doubts")
+            }).execute()
 
-        # --- SAVE TO SUPABASE ---
-        supabase.table("audits").insert({
-            "project_id": project_id,
-            "summary": audit_data.get("summary"),
-            "feature_table": audit_data.get("feature_table"),
-            "strategy": audit_data.get("strategy"),
-            "pm_doubts": audit_data.get("pm_doubts")
-        }).execute()
+            st.success("Audit Saved Successfully")
+            st.json(data)
 
-        st.success("Audit Saved Successfully ✅")
-
-        st.subheader("Generated Audit")
-        st.json(audit_data)
-
-    except Exception as e:
-        st.error(f"Groq Error: {e}")
+        except Exception as e:
+            st.error(f"Groq Error: {e}")
 
 # -------------------------------------------------
 # 2️⃣ AI TESTCASE GENERATOR
@@ -159,24 +136,15 @@ elif menu == "AI Testcase Generator":
     if st.button("Generate Testcases"):
 
         if not project_id:
-            st.error("Select a project first.")
+            st.error("Select project first.")
             st.stop()
 
-        prd_text = prd_text[:5000]
-
         prompt = f"""
-You are a Senior QA Architect.
-
 Return ONLY valid JSON.
-No markdown.
-No explanations.
 
 Feature: {feature_name}
+PRD: {prd_text[:5000]}
 
-PRD:
-{prd_text}
-
-JSON format:
 {{
   "testcases": [
     {{
@@ -192,16 +160,15 @@ JSON format:
 
         try:
             response = groq_client.chat.completions.create(
-                model="llama3-8b-8192",
+                model="llama-3.1-8b-instant",
                 messages=[{"role": "user", "content": prompt}],
                 temperature=0.2
             )
 
-            raw_text = response.choices[0].message.content.strip()
-            data = extract_json(raw_text)
+            data = extract_json(response.choices[0].message.content)
 
             if not data or "testcases" not in data:
-                st.error("AI did not return valid testcases.")
+                st.error("Invalid testcase JSON.")
                 st.stop()
 
             for tc in data["testcases"]:
@@ -227,6 +194,10 @@ elif menu == "Testcases":
 
     st.title("Saved Testcases")
 
+    if not project_id:
+        st.warning("Select a project.")
+        st.stop()
+
     tcs = supabase.table("testcases").select("*").eq("project_id", project_id).execute().data or []
 
     for t in tcs:
@@ -251,6 +222,11 @@ elif menu == "Bug Center":
     steps = st.text_area("Steps to Reproduce")
 
     if st.button("Report Bug"):
+
+        if not project_id:
+            st.error("Select project first.")
+            st.stop()
+
         supabase.table("bugs").insert({
             "project_id": project_id,
             "summary": summary,
@@ -278,6 +254,10 @@ elif menu == "Execution Log":
 
     st.title("Execution Log")
 
+    if not project_id:
+        st.warning("Select a project.")
+        st.stop()
+
     tcs = supabase.table("testcases").select("*").eq("project_id", project_id).execute().data or []
     tc_map = {tc["title"]: tc["id"] for tc in tcs}
 
@@ -288,6 +268,7 @@ elif menu == "Execution Log":
     notes = st.text_area("Notes")
 
     if st.button("Log Execution") and selected_tc:
+
         supabase.table("execution_logs").insert({
             "testcase_id": tc_map[selected_tc],
             "status": status,
