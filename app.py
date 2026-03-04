@@ -64,18 +64,37 @@ def extract_json(text: str) -> dict | None:
         return None
 
 
-def call_groq(prompt: str) -> str | None:
-    """Call Groq and return raw text, or None on failure."""
-    try:
-        response = groq_client.chat.completions.create(
-            model="llama-3.1-8b-instant",
-            messages=[{"role": "user", "content": prompt}],
-            temperature=0.3,
-        )
-        return response.choices[0].message.content
-    except Exception as e:
-        st.error(f"❌ Groq error: {e}")
-        return None
+def call_groq(prompt: str, retries: int = 3) -> str | None:
+    """
+    Call Groq with automatic retries on empty or whitespace-only responses.
+    Uses a system prompt to strongly enforce JSON-only output.
+    """
+    for attempt in range(1, retries + 1):
+        try:
+            response = groq_client.chat.completions.create(
+                model="llama-3.1-8b-instant",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a Senior QA Engineer. "
+                            "You ALWAYS respond with a single valid JSON object. "
+                            "No markdown, no code fences, no explanation — ONLY the raw JSON object."
+                        ),
+                    },
+                    {"role": "user", "content": prompt},
+                ],
+                temperature=0.3,
+            )
+            content = response.choices[0].message.content or ""
+            if content.strip():
+                return content
+            st.toast(f"⚠️ Empty response from AI (attempt {attempt}/{retries}), retrying...")
+        except Exception as e:
+            st.error(f"❌ Groq error on attempt {attempt}: {e}")
+
+    st.error("❌ AI returned empty responses after all retries. Please try again.")
+    return None
 
 
 def validate(**fields) -> list[str]:
