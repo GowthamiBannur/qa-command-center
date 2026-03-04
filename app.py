@@ -53,8 +53,27 @@ def extract_json(text: str) -> dict | None:
     except json.JSONDecodeError:
         pass
 
-    # 4. Fix unescaped literal newlines inside JSON string values
-    #    Replace \n that are NOT already escaped with \\n
+    # 4. Fix YAML-style pipe block syntax: "key": | ...
+    #    Model sometimes writes   "field": |\n    text\n    more
+    #    Convert it to a proper quoted string value
+    import re as _re
+    def fix_yaml_pipes(s):
+        # Replace:  "key": |\n    line1\n    line2\n
+        # With:     "key": "line1\\nline2",
+        def replacer(m):
+            key = m.group(1)
+            block = m.group(2)
+            # Collapse indented lines into a single \n-joined string
+            lines = [l.strip() for l in block.split("\n") if l.strip()]
+            value = "\\n".join(lines).replace('"', '\\\"'  )
+            return f'"{key}": "{value}"'
+        return _re.sub(
+            r'"(\w+)"\s*:\s*\|\s*\n((?:[ \t]+.+\n?)*)',
+            replacer, s
+        )
+    raw = fix_yaml_pipes(raw)
+
+    # 5. Fix unescaped literal newlines inside JSON string values
     fixed = re.sub(r'(?<!\\)\n', r'\\n', raw)
     try:
         return json.loads(fixed)
@@ -194,20 +213,26 @@ if menu == "📋 Senior QA Audit":
             with st.spinner("Analysing PRD with AI..."):
                 prompt = f"""
 You are a Senior QA Engineer with 10 years of experience.
-Analyse the PRD below and return ONLY a valid JSON object.
-Fill EVERY field with detailed, real content. Do NOT leave any value empty or use placeholder text.
+Analyse the PRD below and return ONLY a single raw JSON object.
+
+STRICT RULES — violations will break the parser:
+- Return ONLY the JSON object. No markdown, no code fences, no extra text.
+- All string values must be on ONE line. Use \\n for line breaks inside strings.
+- For the feature_table field, write the markdown table as a single string with \\n between rows.
+- Do NOT use YAML pipe syntax (|) anywhere.
+- Do NOT leave any field empty.
 
 Feature: {feature_name}
 PRD:
 {prd_text[:6000]}
 
-Return exactly this JSON structure:
+Return exactly this structure (all values on one line, use \\n for newlines):
 {{
   "summary": "2-3 sentence overview of the feature and its purpose",
-  "feature_table": "markdown table listing each feature/sub-feature with its scope and testing priority",
+  "feature_table": "| Feature | Scope | Testing Priority |\\n| --- | --- | --- |\\n| Row 1 | ... | High |",
   "strategy": "detailed test strategy covering functional, regression, edge cases, and non-functional testing",
   "risks": "top 3-5 risk areas with likelihood and mitigation approach",
-  "pm_doubts": "numbered list of clarifying questions for the PM that must be answered before testing"
+  "pm_doubts": "1. Question one\\n2. Question two\\n3. Question three"
 }}
 """
                 raw = call_groq(prompt)
@@ -292,16 +317,21 @@ elif menu == "⚙️ AI Testcase Generator":
             st.error(f"Please fill in: {', '.join(missing)}")
             st.stop()
 
+
         with st.spinner(f"Generating {tc_count} test cases..."):
             prompt = f"""
 You are a Senior QA Engineer. Generate exactly {tc_count} test cases for the feature below.
-Return ONLY valid JSON. Populate every field with real content. Do NOT use empty strings.
+
+STRICT RULES:
+- Return ONLY the raw JSON object. No markdown, no code fences, no explanation.
+- All string values must be on ONE line. Use \\n for line breaks inside strings.
+- Do NOT use YAML pipe syntax (|). Do NOT leave any field empty.
 
 Feature: {feature_name}
 PRD:
 {prd_text[:6000]}
 
-Return this JSON structure:
+Return exactly this structure:
 {{
   "testcases": [
     {{
