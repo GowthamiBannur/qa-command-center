@@ -173,8 +173,6 @@ if menu == "🚀 Generate & Audit":
         feature_name = st.text_input("Feature Name *", placeholder="e.g. Search Revamp")
         prd_text     = st.text_area("Paste PRD *", height=260,
                                     placeholder="Paste full PRD here…")
-        tc_count     = st.slider("Test cases to generate", 5, 25, 12)
-
         if st.button("🚀 Generate Audit + Testcases", type="primary"):
             missing = validate(feature=feature_name, prd=prd_text)
             if missing:
@@ -239,9 +237,12 @@ Return exactly:
                 st.write(audit_data.get("pm_doubts"))
 
             # ── Step 2: Testcases ──────────────────────────────
-            with st.spinner(f"Step 2/2 — Generating {tc_count} test cases…"):
+            with st.spinner("Step 2/2 — Generating full test coverage…"):
                 tc_prompt = f"""
-You are a Senior QA Engineer. Generate exactly {tc_count} test cases covering positive, negative, and edge cases.
+You are a Senior QA Engineer with 10+ years of experience.
+Generate a COMPLETE test suite — every possible scenario for this feature.
+Do NOT cap the number. Cover: happy path, negative, edge cases, boundary values,
+empty/null inputs, concurrent use, network failure, permissions, UI/UX, performance, regression.
 Return ONLY a raw JSON object. All strings single-line. Use \\n for steps. No YAML pipes.
 
 Feature: {feature_name}
