@@ -9,7 +9,7 @@ from email.mime.multipart import MIMEMultipart
 # CONFIG
 # ═══════════════════════════════════════════════════════════════
 
-st.set_page_config(page_title="QA Command Center", page_icon="🧪", layout="wide")
+st.set_page_config(page_title="QA Command Center", page_icon="🧪", layout="wide", initial_sidebar_state="expanded")
 
 # ── Global CSS theme ────────────────────────────────────────────
 st.markdown("""
@@ -378,7 +378,20 @@ def get_project_id(projects, name):
 
 def require_project():
     if not st.session_state.get("project_id"):
-        st.info("👈 Select or create a project first."); st.stop()
+        st.markdown("""
+        <div style="background:rgba(0,200,180,0.07);border:1px solid rgba(0,200,180,0.25);
+             border-radius:12px;padding:24px 28px;margin-top:20px;text-align:center">
+          <div style="font-size:36px;margin-bottom:12px">👈</div>
+          <div style="color:#00c8b4;font-size:16px;font-weight:600;font-family:Outfit,sans-serif;margin-bottom:6px">
+            Select a Project from the Sidebar
+          </div>
+          <div style="color:#4a7a74;font-size:13px;font-family:Outfit,sans-serif">
+            Use the <b style="color:#00c8b4">PROJECT</b> dropdown in the left sidebar,
+            or click <b style="color:#00c8b4">+ New Project</b> to create one.
+          </div>
+        </div>
+        """, unsafe_allow_html=True)
+        st.stop()
 
 # ═══════════════════════════════════════════════════════════════
 # AUTH — NATIVE STREAMLIT DIALOG (works reliably on Streamlit Cloud)
