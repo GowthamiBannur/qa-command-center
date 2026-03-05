@@ -190,18 +190,10 @@ hr { border-color: rgba(0,200,180,0.1) !important; }
 /* Hide streamlit branding */
 #MainMenu, footer, header { visibility: hidden !important; }
 
-/* Force sidebar always open — hide collapse/expand button */
-[data-testid="collapsedControl"] { display: none !important; }
-section[data-testid="stSidebar"] {
-    min-width: 280px !important;
-    max-width: 280px !important;
-    transform: none !important;
-    visibility: visible !important;
-    left: 0 !important;
-}
-/* Keep main content from going under sidebar */
-.main .block-container {
-    padding-left: 1rem !important;
+/* Sidebar width */
+section[data-testid="stSidebar"] > div:first-child {
+    width: 300px !important;
+    padding-top: 1rem !important;
 }
 
 /* Auth modal overlay */
@@ -567,54 +559,51 @@ is_admin = user.get("role") == "admin"
 # SIDEBAR
 # ─────────────────────────────────────────────
 
-st.sidebar.markdown(f"""
-<div style="padding:4px 0 12px">
-  <div style="font-size:20px;font-weight:700;color:#00c8b4;letter-spacing:0.04em;font-family:Outfit,sans-serif">
-    🧪 QA Command Center
-  </div>
-  <div style="margin-top:6px">
-    <span style="font-size:11px;background:rgba(0,200,180,0.12);border:1px solid rgba(0,200,180,0.25);
-    color:#00c8b4;padding:2px 10px;border-radius:20px;font-family:Outfit,sans-serif;letter-spacing:0.04em">
-    {'🛡 Admin' if is_admin else '👤 Member'}
-    </span>
-  </div>
-</div>
-""", unsafe_allow_html=True)
-
-# ── Notification bell in sidebar ─────────────────────────────
-notifs_all = supabase.table("notifications").select("*") \
-                 .order("created_at", desc=True).limit(60).execute().data or []
-unread_count = sum(1 for n in notifs_all if not n.get("is_read"))
-bell_label   = f"🔔  Notifications  {'  🔵 ' + str(unread_count) if unread_count else ''}"
-
-nav_options = ["🚀 Generate & Audit", "📁 Testcases", "🐛 Bug Center", "📊 Dashboard", bell_label]
-if is_admin:
-    nav_options.insert(4, "👥 Team Access")
-
-menu = st.sidebar.radio("", nav_options, label_visibility="collapsed")
+# ── Sidebar header ───────────────────────────────────────────
+st.sidebar.title("🧪 QA Command Center")
+st.sidebar.caption("🛡 Admin" if is_admin else "👤 Member")
 st.sidebar.divider()
 
-# Project picker
+# ── Navigation ────────────────────────────────────────────────
+notifs_all   = supabase.table("notifications").select("id,is_read") \
+                   .order("created_at", desc=True).limit(60).execute().data or []
+unread_count = sum(1 for n in notifs_all if not n.get("is_read"))
+bell_label   = f"🔔 Notifications ({unread_count} new)" if unread_count else "🔔 Notifications"
+
+nav_options = ["🚀 Generate & Audit", "📁 Testcases", "🐛 Bug Center", "📊 Dashboard"]
+if is_admin:
+    nav_options.append("👥 Team Access")
+nav_options.append(bell_label)
+
+menu = st.sidebar.radio("Navigate", nav_options, label_visibility="collapsed")
+st.sidebar.divider()
+
+# ── Project picker ────────────────────────────────────────────
 projects      = get_projects()
 project_names = [p["name"] for p in projects]
 _auto         = st.session_state.pop("_auto_select_proj", None)
 _proj_list    = project_names if project_names else ["— No projects yet —"]
 _default_idx  = _proj_list.index(_auto) if (_auto and _auto in _proj_list) else 0
 
-st.sidebar.markdown('<p style="color:#3a6660;font-size:11px;letter-spacing:0.08em;text-transform:uppercase;margin-bottom:4px;font-family:Outfit,sans-serif">PROJECT</p>', unsafe_allow_html=True)
-sel_proj   = st.sidebar.selectbox("", _proj_list, index=_default_idx, label_visibility="collapsed")
+st.sidebar.markdown("**PROJECT**")
+sel_proj   = st.sidebar.selectbox("Project", _proj_list, index=_default_idx, label_visibility="collapsed")
 project_id = get_project_id(projects, sel_proj)
 st.session_state["project_id"] = project_id
 
 if project_id:
-    st.sidebar.markdown(f'<div style="background:rgba(0,200,180,0.08);border:1px solid rgba(0,200,180,0.2);border-radius:8px;padding:7px 12px;font-size:13px;color:#00c8b4;font-family:Outfit,sans-serif;margin-bottom:8px">📂 {sel_proj}</div>', unsafe_allow_html=True)
+    st.sidebar.success(f"📂 {sel_proj}")
 
-with st.sidebar.expander("+ New Project"):
-    new_proj = st.text_input("", key="new_proj_input", placeholder="Project name…", label_visibility="collapsed")
-    if st.button("Create Project", key="btn_new_proj", use_container_width=True):
+# ── New Project ───────────────────────────────────────────────
+with st.sidebar.expander("➕ New Project"):
+    new_proj = st.text_input("Project name", key="new_proj_input",
+                              placeholder="e.g. Search Revamp v2",
+                              label_visibility="collapsed")
+    if st.button("Create", key="btn_new_proj", use_container_width=True, type="primary"):
         name = new_proj.strip()
-        if not name: st.error("Name required.")
-        elif name in project_names: st.warning(f'"{name}" already exists.')
+        if not name:
+            st.error("Name required.")
+        elif name in project_names:
+            st.warning(f'"{name}" already exists.')
         else:
             try:
                 supabase.table("projects").insert({"name": name, "created_by": user["id"]}).execute()
@@ -630,8 +619,9 @@ with st.sidebar.expander("+ New Project"):
 st.sidebar.divider()
 if st.sidebar.button("🚪 Logout", use_container_width=True):
     st.session_state["user"] = None
-    st.session_state["auth_tab"] = "login"
+    st.session_state["auth_mode"] = "login"
     st.rerun()
+
 
 # ═══════════════════════════════════════════════════════════════
 # PAGE — NOTIFICATIONS
