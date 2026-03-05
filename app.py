@@ -16,42 +16,15 @@ st.markdown("""
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap');
 
-html, body, [class*="css"] {
-    font-family: 'Outfit', sans-serif !important;
+/* Font */
+html, body, [class*="css"], .stApp { font-family: 'Outfit', sans-serif !important; }
+
+/* Background — safe, no layout interference */
+[data-testid="stAppViewContainer"] > .main {
+    background-color: #050d1a;
 }
-
-/* Background */
-.stApp {
-    background: #050d1a !important;
-    background-image:
-        radial-gradient(ellipse 80% 50% at 20% 10%, rgba(0,200,180,0.07) 0%, transparent 60%),
-        radial-gradient(ellipse 60% 40% at 80% 80%, rgba(0,120,255,0.06) 0%, transparent 60%),
-        repeating-linear-gradient(
-            0deg,
-            transparent,
-            transparent 39px,
-            rgba(0,200,180,0.03) 40px
-        ),
-        repeating-linear-gradient(
-            90deg,
-            transparent,
-            transparent 39px,
-            rgba(0,200,180,0.03) 40px
-        ) !important;
-}
-
-/* Sidebar */
-
-/* Sidebar title */
-
-/* Nav radio */
-div[role="radiogroup"] label {
-    border-radius: 8px !important;
-    padding: 6px 12px !important;
-    transition: all 0.2s !important;
-}
-div[role="radiogroup"] label:hover {
-    background: rgba(0,200,180,0.08) !important;
+[data-testid="stAppViewContainer"] {
+    background-color: #050d1a;
 }
 
 /* Metric cards */
@@ -61,43 +34,7 @@ div[role="radiogroup"] label:hover {
     border-radius: 12px !important;
     padding: 16px !important;
 }
-[data-testid="metric-container"] label {
-    color: #6b8f8b !important;
-    font-size: 0.75rem !important;
-    letter-spacing: 0.08em !important;
-    text-transform: uppercase !important;
-}
-[data-testid="metric-container"] [data-testid="stMetricValue"] {
-    color: #00c8b4 !important;
-    font-size: 1.8rem !important;
-    font-weight: 700 !important;
-}
-
-/* Expanders */
-details {
-    background: rgba(255,255,255,0.02) !important;
-    border: 1px solid rgba(0,200,180,0.12) !important;
-    border-radius: 10px !important;
-    margin-bottom: 8px !important;
-}
-details summary {
-    color: #cce8e4 !important;
-    font-weight: 500 !important;
-    padding: 4px !important;
-}
-
-/* Inputs */
-input, textarea, select, [data-baseweb="input"] input, [data-baseweb="textarea"] textarea {
-    background: rgba(0,200,180,0.04) !important;
-    border: 1px solid rgba(0,200,180,0.18) !important;
-    border-radius: 8px !important;
-    color: #e2f0ee !important;
-    font-family: 'Outfit', sans-serif !important;
-}
-input:focus, textarea:focus {
-    border-color: #00c8b4 !important;
-    box-shadow: 0 0 0 2px rgba(0,200,180,0.15) !important;
-}
+[data-testid="stMetricValue"] { color: #00c8b4 !important; font-weight: 700 !important; }
 
 /* Buttons */
 .stButton > button {
@@ -107,61 +44,19 @@ input:focus, textarea:focus {
     border-radius: 8px !important;
     font-weight: 600 !important;
     font-family: 'Outfit', sans-serif !important;
-    transition: all 0.2s !important;
-    letter-spacing: 0.02em !important;
 }
 .stButton > button:hover {
+    box-shadow: 0 4px 20px rgba(0,200,180,0.35) !important;
     transform: translateY(-1px) !important;
-    box-shadow: 0 4px 20px rgba(0,200,180,0.3) !important;
-}
-.stButton > button[kind="secondary"] {
-    background: transparent !important;
-    border: 1px solid rgba(0,200,180,0.3) !important;
-    color: #00c8b4 !important;
 }
 
 /* Tabs */
-[data-baseweb="tab-list"] {
-    background: transparent !important;
-    border-bottom: 1px solid rgba(0,200,180,0.15) !important;
-    gap: 4px !important;
-}
-[data-baseweb="tab"] {
-    background: transparent !important;
-    color: #6b8f8b !important;
-    border-radius: 8px 8px 0 0 !important;
-    font-family: 'Outfit', sans-serif !important;
-    font-weight: 500 !important;
-}
-[aria-selected="true"][data-baseweb="tab"] {
-    color: #00c8b4 !important;
-    border-bottom: 2px solid #00c8b4 !important;
-    background: rgba(0,200,180,0.06) !important;
-}
-
-/* Selectbox */
-[data-baseweb="select"] > div {
-    background: rgba(0,200,180,0.04) !important;
-    border: 1px solid rgba(0,200,180,0.18) !important;
-    border-radius: 8px !important;
-    color: #e2f0ee !important;
-}
+[data-baseweb="tab"] { color: #6b8f8b !important; font-family: 'Outfit', sans-serif !important; }
+[aria-selected="true"][data-baseweb="tab"] { color: #00c8b4 !important; }
 
 /* Titles */
-h1, h2, h3 {
-    color: #e2f0ee !important;
-    font-family: 'Outfit', sans-serif !important;
-}
-h1 { font-weight: 700 !important; letter-spacing: -0.02em !important; }
-
-/* Divider */
-hr { border-color: rgba(0,200,180,0.1) !important; }
-
-/* Success / info / warning */
-[data-testid="stAlert"] {
-    border-radius: 10px !important;
-    font-family: 'Outfit', sans-serif !important;
-}
+h1, h2, h3 { color: #e2f0ee !important; font-family: 'Outfit', sans-serif !important; }
+h1 { font-weight: 700 !important; }
 
 /* Progress bar */
 [data-testid="stProgressBar"] > div > div {
@@ -169,53 +64,24 @@ hr { border-color: rgba(0,200,180,0.1) !important; }
 }
 
 /* Scrollbar */
-::-webkit-scrollbar { width: 5px; height: 5px; }
+::-webkit-scrollbar { width: 5px; }
 ::-webkit-scrollbar-track { background: #040c17; }
 ::-webkit-scrollbar-thumb { background: rgba(0,200,180,0.3); border-radius: 3px; }
 
-/* Hide streamlit branding */
-#MainMenu, footer, header { visibility: hidden !important; }
-
-
-
-/* Auth modal overlay */
-.auth-overlay {
-    position: fixed; inset: 0;
-    background: rgba(5,13,26,0.85);
-    backdrop-filter: blur(12px);
-    -webkit-backdrop-filter: blur(12px);
-    z-index: 9999;
-    display: flex; align-items: center; justify-content: center;
-}
-.auth-card {
-    background: linear-gradient(145deg, #0a1f2e, #071524);
-    border: 1px solid rgba(0,200,180,0.25);
-    border-radius: 20px;
-    padding: 40px 44px;
-    width: 420px;
-    box-shadow: 0 30px 80px rgba(0,0,0,0.6), 0 0 0 1px rgba(0,200,180,0.1);
-}
-
-/* Notification page */
-.notif-item {
-    background: rgba(0,200,180,0.04);
-    border: 1px solid rgba(0,200,180,0.1);
-    border-radius: 10px;
-    padding: 14px 16px;
-    margin-bottom: 8px;
-    transition: border-color 0.2s;
-}
-.notif-item.unread {
+/* Notification cards */
+.notif-unread {
     border-left: 3px solid #00c8b4;
     background: rgba(0,200,180,0.07);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 8px;
 }
-.notif-dot {
-    display: inline-block;
-    width: 8px; height: 8px;
-    background: #00c8b4;
-    border-radius: 50%;
-    margin-right: 8px;
-    vertical-align: middle;
+.notif-read {
+    border-left: 3px solid transparent;
+    background: rgba(255,255,255,0.02);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 8px;
 }
 </style>
 """, unsafe_allow_html=True)
