@@ -381,201 +381,158 @@ def require_project():
         st.info("👈 Select or create a project first."); st.stop()
 
 # ═══════════════════════════════════════════════════════════════
-# AUTH — BLURRED POPUP OVERLAY
+# AUTH — NATIVE STREAMLIT DIALOG (works reliably on Streamlit Cloud)
 # ═══════════════════════════════════════════════════════════════
 
 if "user" not in st.session_state:
     st.session_state["user"] = None
-if "auth_tab" not in st.session_state:
-    st.session_state["auth_tab"] = "login"  # 'login' | 'request' | 'pending'
+if "auth_mode" not in st.session_state:
+    st.session_state["auth_mode"] = "login"   # login | request | pending
 
 user = st.session_state["user"]
 
-if not user:
-    # Render dummy background so blur has something to show
+@st.dialog(" ")
+def auth_dialog():
+    mode = st.session_state["auth_mode"]
+
+    # ── Header ──────────────────────────────────────────────────
     st.markdown("""
-    <div style="position:fixed;inset:0;background:#050d1a;
-        background-image:
-            radial-gradient(ellipse 80% 50% at 20% 10%,rgba(0,200,180,0.07) 0%,transparent 60%),
-            radial-gradient(ellipse 60% 40% at 80% 80%,rgba(0,120,255,0.06) 0%,transparent 60%),
-            repeating-linear-gradient(0deg,transparent,transparent 39px,rgba(0,200,180,0.03) 40px),
-            repeating-linear-gradient(90deg,transparent,transparent 39px,rgba(0,200,180,0.03) 40px);
-        z-index:0">
-      <div style="position:absolute;top:50%;left:50%;transform:translate(-50%,-60%);text-align:center;opacity:0.06">
-        <div style="font-size:120px">🧪</div>
-        <div style="color:#00c8b4;font-size:32px;font-family:Outfit,sans-serif;font-weight:700;letter-spacing:0.1em">QA COMMAND CENTER</div>
-      </div>
+    <div style="text-align:center;padding:8px 0 20px">
+      <div style="font-size:44px">🧪</div>
+      <h2 style="color:#e2f0ee;font-family:Outfit,sans-serif;font-weight:700;
+          margin:6px 0 4px;font-size:22px;letter-spacing:-0.01em">QA Command Center</h2>
+      <p style="color:#4a7a74;font-size:13px;margin:0;font-family:Outfit,sans-serif">
+        AI-powered QA workspace
+      </p>
     </div>
     """, unsafe_allow_html=True)
 
-    tab_state = st.session_state["auth_tab"]
-
-    if tab_state == "pending":
+    if mode == "pending":
         st.markdown("""
-        <div style="position:fixed;inset:0;background:rgba(5,13,26,0.9);backdrop-filter:blur(16px);
-             z-index:9999;display:flex;align-items:center;justify-content:center">
-          <div style="background:linear-gradient(145deg,#0a1f2e,#071524);border:1px solid rgba(0,200,180,0.25);
-               border-radius:20px;padding:48px 52px;width:420px;text-align:center;
-               box-shadow:0 30px 80px rgba(0,0,0,0.7)">
-            <div style="font-size:56px;margin-bottom:16px">⏳</div>
-            <h2 style="color:#00c8b4;font-family:Outfit,sans-serif;font-weight:700;margin:0 0 12px">Access Pending</h2>
-            <p style="color:#7ab8b2;font-family:Outfit,sans-serif;font-size:15px;line-height:1.6;margin:0 0 28px">
-              Your request has been submitted.<br>The admin will review and approve it shortly.<br>
-              You'll receive an email once approved.
-            </p>
-            <div style="background:rgba(0,200,180,0.08);border:1px solid rgba(0,200,180,0.2);border-radius:10px;padding:14px;margin-bottom:24px">
-              <span style="color:#00c8b4;font-size:13px;font-family:Outfit,sans-serif">
-                📧 Check your email for approval notification
-              </span>
-            </div>
-          </div>
+        <div style="text-align:center;padding:12px 0">
+          <div style="font-size:48px;margin-bottom:12px">⏳</div>
+          <h3 style="color:#00c8b4;font-family:Outfit,sans-serif;margin:0 0 10px">Access Pending</h3>
+          <p style="color:#7ab8b2;font-size:14px;line-height:1.7;margin:0 0 16px;font-family:Outfit,sans-serif">
+            Your request has been submitted.<br>
+            The admin will review and approve it shortly.<br>
+            You'll receive an email once approved.
+          </p>
         </div>
         """, unsafe_allow_html=True)
-        if st.button("← Back to Login", key="back_to_login"):
-            st.session_state["auth_tab"] = "login"
+        st.info("📧 Check your inbox for approval notification.")
+        if st.button("← Back to Login", use_container_width=True):
+            st.session_state["auth_mode"] = "login"
             st.rerun()
-        st.stop()
+        return
 
-    # ── Login or Request Access ────────────────────────────────
-    col_pad1, col_main, col_pad2 = st.columns([1, 1.2, 1])
-    with col_main:
-        # Floating card via HTML backdrop
-        st.markdown("""
-        <div style="position:fixed;inset:0;background:rgba(5,13,26,0.88);
-             backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);z-index:998">
-        </div>
-        <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-             width:420px;z-index:999;
-             background:linear-gradient(145deg,#0d2030,#081825);
-             border:1px solid rgba(0,200,180,0.22);border-radius:20px;
-             padding:40px 44px;
-             box-shadow:0 30px 80px rgba(0,0,0,0.7),0 0 0 1px rgba(0,200,180,0.08),inset 0 1px 0 rgba(0,200,180,0.1)">
-          <div style="text-align:center;margin-bottom:28px">
-            <div style="font-size:40px;margin-bottom:10px">🧪</div>
-            <h2 style="color:#e2f0ee;font-family:Outfit,sans-serif;font-weight:700;
-                margin:0 0 4px;font-size:22px;letter-spacing:-0.02em">QA Command Center</h2>
-            <p style="color:#4a7a74;font-family:Outfit,sans-serif;font-size:13px;margin:0">
-              AI-powered QA workspace
-            </p>
-          </div>
-        </div>
-        """, unsafe_allow_html=True)
+    # ── Tab toggle ───────────────────────────────────────────────
+    col_t1, col_t2 = st.columns(2)
+    with col_t1:
+        login_active = "background:rgba(0,200,180,0.15);border:1px solid rgba(0,200,180,0.4);color:#00c8b4;" if mode=="login" else "background:transparent;border:1px solid rgba(255,255,255,0.08);color:#4a7a74;"
+        st.markdown(f'<div style="{login_active}text-align:center;padding:8px 0;border-radius:8px;font-family:Outfit,sans-serif;font-weight:600;font-size:14px">🔐 Login</div>', unsafe_allow_html=True)
+    with col_t2:
+        req_active = "background:rgba(0,200,180,0.15);border:1px solid rgba(0,200,180,0.4);color:#00c8b4;" if mode=="request" else "background:transparent;border:1px solid rgba(255,255,255,0.08);color:#4a7a74;"
+        st.markdown(f'<div style="{req_active}text-align:center;padding:8px 0;border-radius:8px;font-family:Outfit,sans-serif;font-weight:600;font-size:14px">✋ Request Access</div>', unsafe_allow_html=True)
 
-        # Tab toggle — Login vs Request
-        if tab_state == "login":
-            st.markdown('<div style="height:220px"></div>', unsafe_allow_html=True)
-            st.markdown("""
-            <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-                 width:420px;z-index:1000;padding:130px 44px 0">
-              <div style="display:flex;gap:8px;margin-bottom:20px">
-                <div style="flex:1;text-align:center;padding:8px;border-radius:8px;
-                     background:rgba(0,200,180,0.12);border:1px solid rgba(0,200,180,0.3);
-                     color:#00c8b4;font-family:Outfit,sans-serif;font-weight:600;font-size:14px;
-                     cursor:pointer">🔐 Login</div>
-                <div style="flex:1;text-align:center;padding:8px;border-radius:8px;
-                     background:transparent;border:1px solid rgba(255,255,255,0.08);
-                     color:#4a7a74;font-family:Outfit,sans-serif;font-weight:500;font-size:14px">
-                     ✋ Request Access</div>
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
+    st.markdown("<div style='height:8px'></div>", unsafe_allow_html=True)
 
-            login_email = st.text_input("Email", placeholder="you@company.com", key="login_email",
-                                        label_visibility="collapsed")
-            st.markdown('<p style="color:#4a7a74;font-size:12px;margin:-8px 0 8px;font-family:Outfit,sans-serif">Work email address</p>', unsafe_allow_html=True)
-
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("🔐 Login", type="primary", key="btn_login", use_container_width=True):
-                    if not login_email.strip():
-                        st.error("Enter your email.")
+    if mode == "login":
+        st.markdown('<p style="color:#7ab8b2;font-size:13px;margin:0 0 6px;font-family:Outfit,sans-serif">Work email</p>', unsafe_allow_html=True)
+        login_email = st.text_input("email", placeholder="you@company.com",
+                                     key="dlg_login_email", label_visibility="collapsed")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("🔐 Login", type="primary", key="dlg_btn_login", use_container_width=True):
+                if not login_email.strip():
+                    st.error("Enter your email.")
+                else:
+                    result = supabase.table("users").select("*")                                  .eq("email", login_email.strip().lower()).execute().data
+                    if not result:
+                        st.error("No account. Request access →")
+                    elif result[0]["status"] == "pending":
+                        st.session_state["auth_mode"] = "pending"
+                        st.rerun()
+                    elif result[0]["status"] == "rejected":
+                        st.error("Access rejected. Contact admin.")
                     else:
-                        result = supabase.table("users").select("*") \
-                                     .eq("email", login_email.strip().lower()).execute().data
-                        if not result:
-                            st.error("No account found. Request access.")
-                        elif result[0]["status"] == "pending":
-                            st.session_state["auth_tab"] = "pending"
-                            st.rerun()
-                        elif result[0]["status"] == "rejected":
-                            st.error("Access was rejected. Contact admin.")
+                        st.session_state["user"] = result[0]
+                        st.rerun()
+        with col_b:
+            if st.button("✋ Request Access", key="dlg_go_req", use_container_width=True):
+                st.session_state["auth_mode"] = "request"
+                st.rerun()
+
+    else:  # request
+        st.markdown('<p style="color:#7ab8b2;font-size:13px;margin:0 0 6px;font-family:Outfit,sans-serif">Full name</p>', unsafe_allow_html=True)
+        req_name  = st.text_input("name", placeholder="Priya Sharma",
+                                   key="dlg_req_name", label_visibility="collapsed")
+        st.markdown('<p style="color:#7ab8b2;font-size:13px;margin:4px 0 6px;font-family:Outfit,sans-serif">Work email</p>', unsafe_allow_html=True)
+        req_email = st.text_input("reqemail", placeholder="priya@company.com",
+                                   key="dlg_req_email", label_visibility="collapsed")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            if st.button("✋ Submit Request", type="primary", key="dlg_btn_req", use_container_width=True):
+                missing = validate(name=req_name, email=req_email)
+                if missing:
+                    st.error(f"Fill in: {', '.join(missing)}")
+                else:
+                    email_clean = req_email.strip().lower()
+                    existing = supabase.table("users").select("id,status").eq("email", email_clean).execute().data
+                    if existing:
+                        s = existing[0]["status"]
+                        if s == "approved":
+                            st.info("You already have access! Use Login tab.")
+                        elif s == "pending":
+                            st.session_state["auth_mode"] = "pending"; st.rerun()
                         else:
-                            st.session_state["user"] = result[0]
-                            st.toast(f"Welcome, {result[0]['name']}! 👋", icon="✅")
-                            st.rerun()
-            with col_b:
-                if st.button("✋ Request", key="go_request", use_container_width=True):
-                    st.session_state["auth_tab"] = "request"
-                    st.rerun()
-
-        else:  # request tab
-            st.markdown('<div style="height:220px"></div>', unsafe_allow_html=True)
-            st.markdown("""
-            <div style="position:fixed;top:50%;left:50%;transform:translate(-50%,-50%);
-                 width:420px;z-index:1000;padding:130px 44px 0">
-              <div style="display:flex;gap:8px;margin-bottom:20px">
-                <div style="flex:1;text-align:center;padding:8px;border-radius:8px;
-                     background:transparent;border:1px solid rgba(255,255,255,0.08);
-                     color:#4a7a74;font-family:Outfit,sans-serif;font-weight:500;font-size:14px">
-                     🔐 Login</div>
-                <div style="flex:1;text-align:center;padding:8px;border-radius:8px;
-                     background:rgba(0,200,180,0.12);border:1px solid rgba(0,200,180,0.3);
-                     color:#00c8b4;font-family:Outfit,sans-serif;font-weight:600;font-size:14px">
-                     ✋ Request Access</div>
-              </div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            req_name  = st.text_input("Full Name", placeholder="Priya Sharma", key="req_name")
-            req_email = st.text_input("Work Email", placeholder="priya@company.com", key="req_email")
-
-            col_a, col_b = st.columns(2)
-            with col_a:
-                if st.button("✋ Submit Request", type="primary", key="btn_request", use_container_width=True):
-                    missing = validate(name=req_name, email=req_email)
-                    if missing:
-                        st.error(f"Fill in: {', '.join(missing)}")
+                            st.error("Previously rejected. Contact admin.")
                     else:
-                        email_clean = req_email.strip().lower()
-                        existing = supabase.table("users").select("id,status").eq("email", email_clean).execute().data
-                        if existing:
-                            s = existing[0]["status"]
-                            if s == "approved": st.info("You already have access! Use Login.")
-                            elif s == "pending":
-                                st.session_state["auth_tab"] = "pending"; st.rerun()
-                            else: st.error("Request previously rejected. Contact admin.")
-                        else:
-                            supabase.table("users").insert({
-                                "name": req_name.strip(), "email": email_clean,
-                                "role": "member", "status": "pending"
-                            }).execute()
-                            push_notification(req_name.strip(),
-                                "requested access to QA Command Center", "user",
-                                actor_email=email_clean)
-                            try:
-                                send_email(
-                                    to_email=st.secrets["GMAIL_ADDRESS"],
-                                    subject=f"[QA Center] Access request from {req_name.strip()}",
-                                    body_html=f"""
-<div style="font-family:sans-serif;max-width:500px;padding:24px">
+                        supabase.table("users").insert({
+                            "name": req_name.strip(), "email": email_clean,
+                            "role": "member", "status": "pending"
+                        }).execute()
+                        push_notification(req_name.strip(),
+                            "requested access to QA Command Center", "user",
+                            actor_email=email_clean)
+                        try:
+                            send_email(
+                                to_email=st.secrets["GMAIL_ADDRESS"],
+                                subject=f"[QA Center] Access request from {req_name.strip()}",
+                                body_html=f"""<div style="font-family:sans-serif;max-width:500px;padding:24px">
   <h3 style="color:#00c8b4">New Access Request</h3>
   <p><b>Name:</b> {req_name.strip()}<br><b>Email:</b> {email_clean}</p>
   <p>Log in as admin to approve or reject.</p>
 </div>"""
-                                )
-                            except Exception:
-                                pass
-                            st.session_state["auth_tab"] = "pending"
-                            st.rerun()
-            with col_b:
-                if st.button("← Back", key="go_login", use_container_width=True):
-                    st.session_state["auth_tab"] = "login"
-                    st.rerun()
+                            )
+                        except Exception:
+                            pass
+                        st.session_state["auth_mode"] = "pending"
+                        st.rerun()
+        with col_b:
+            if st.button("← Back to Login", key="dlg_back_login", use_container_width=True):
+                st.session_state["auth_mode"] = "login"
+                st.rerun()
+
+
+if not user:
+    # Show the blurred background page content behind the dialog
+    st.markdown("""
+    <div style="text-align:center;padding:180px 20px 0;opacity:0.04;pointer-events:none;user-select:none">
+      <div style="font-size:100px">🧪</div>
+      <div style="color:#00c8b4;font-size:28px;font-family:Outfit,sans-serif;font-weight:700;
+           letter-spacing:0.15em;margin-top:16px">QA COMMAND CENTER</div>
+      <div style="color:#00c8b4;font-size:13px;letter-spacing:0.3em;margin-top:8px;opacity:0.5">
+        AI · AUDIT · TESTCASES · BUGS · DASHBOARD
+      </div>
+    </div>
+    """, unsafe_allow_html=True)
+    auth_dialog()
     st.stop()
 
 # ═══════════════════════════════════════════════════════════════
 # LOGGED IN — MAIN APP
 # ═══════════════════════════════════════════════════════════════
+
 
 is_admin = user.get("role") == "admin"
 
