@@ -190,6 +190,20 @@ hr { border-color: rgba(0,200,180,0.1) !important; }
 /* Hide streamlit branding */
 #MainMenu, footer, header { visibility: hidden !important; }
 
+/* Force sidebar always open — hide collapse/expand button */
+[data-testid="collapsedControl"] { display: none !important; }
+section[data-testid="stSidebar"] {
+    min-width: 280px !important;
+    max-width: 280px !important;
+    transform: none !important;
+    visibility: visible !important;
+    left: 0 !important;
+}
+/* Keep main content from going under sidebar */
+.main .block-container {
+    padding-left: 1rem !important;
+}
+
 /* Auth modal overlay */
 .auth-overlay {
     position: fixed; inset: 0;
