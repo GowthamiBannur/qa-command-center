@@ -41,22 +41,8 @@ html, body, [class*="css"] {
 }
 
 /* Sidebar */
-section[data-testid="stSidebar"] {
-    background: #040c17 !important;
-    border-right: 1px solid rgba(0,200,180,0.12) !important;
-}
-section[data-testid="stSidebar"] * {
-    font-family: 'Outfit', sans-serif !important;
-    color: #a8c4c0 !important;
-}
 
 /* Sidebar title */
-section[data-testid="stSidebar"] h1 {
-    color: #00c8b4 !important;
-    font-size: 1.1rem !important;
-    font-weight: 700 !important;
-    letter-spacing: 0.05em !important;
-}
 
 /* Nav radio */
 div[role="radiogroup"] label {
@@ -190,11 +176,7 @@ hr { border-color: rgba(0,200,180,0.1) !important; }
 /* Hide streamlit branding */
 #MainMenu, footer, header { visibility: hidden !important; }
 
-/* Sidebar width */
-section[data-testid="stSidebar"] > div:first-child {
-    width: 300px !important;
-    padding-top: 1rem !important;
-}
+
 
 /* Auth modal overlay */
 .auth-overlay {
