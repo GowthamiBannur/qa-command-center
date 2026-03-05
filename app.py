@@ -545,8 +545,11 @@ st.sidebar.markdown(f"""
   <div style="font-size:20px;font-weight:700;color:#00c8b4;letter-spacing:0.04em;font-family:Outfit,sans-serif">
     🧪 QA Command Center
   </div>
-  <div style="font-size:12px;color:#3a6660;margin-top:4px;font-family:Outfit,sans-serif">
-    {'🛡 Admin' if is_admin else '👤'} {user['name']}
+  <div style="margin-top:6px">
+    <span style="font-size:11px;background:rgba(0,200,180,0.12);border:1px solid rgba(0,200,180,0.25);
+    color:#00c8b4;padding:2px 10px;border-radius:20px;font-family:Outfit,sans-serif;letter-spacing:0.04em">
+    {'🛡 Admin' if is_admin else '👤 Member'}
+    </span>
   </div>
 </div>
 """, unsafe_allow_html=True)
@@ -579,7 +582,7 @@ st.session_state["project_id"] = project_id
 if project_id:
     st.sidebar.markdown(f'<div style="background:rgba(0,200,180,0.08);border:1px solid rgba(0,200,180,0.2);border-radius:8px;padding:7px 12px;font-size:13px;color:#00c8b4;font-family:Outfit,sans-serif;margin-bottom:8px">📂 {sel_proj}</div>', unsafe_allow_html=True)
 
-with st.sidebar.expander("＋ New Project"):
+with st.sidebar.expander("+ New Project"):
     new_proj = st.text_input("", key="new_proj_input", placeholder="Project name…", label_visibility="collapsed")
     if st.button("Create Project", key="btn_new_proj", use_container_width=True):
         name = new_proj.strip()
